@@ -2653,7 +2653,7 @@ export function createPromptApiRouter(
           () =>
             reject(
               new Error(
-                `Credential test timed out after ${TEST_TIMEOUT_MS / 1000}s`,
+                `No reply within ${TEST_TIMEOUT_MS / 1000}s — credential is likely unhealthy (quota exhausted, expired token, or upstream down). Check container logs for the underlying error.`,
               ),
             ),
           TEST_TIMEOUT_MS,

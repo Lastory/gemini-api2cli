@@ -1889,42 +1889,177 @@ function renderAcpPromptList(prompts, nowMs) {
   return ordered.map(p => renderAcpPrompt(p, nowMs)).join('');
 }
 
-async function fetchAcpWorkerDetail(credentialId) {
-  // Fetch quota + recent prompts in parallel. Either may fail
-  // independently — render whatever we got.
-  const results = await Promise.allSettled([
-    api('/v1/quotas/' + encodeURIComponent(credentialId)),
-    api('/v1/acp/workers/' + encodeURIComponent(credentialId) + '/recent'),
-  ]);
-  const quota = results[0].status === 'fulfilled' ? results[0].value : null;
-  const promptsResp = results[1].status === 'fulfilled' ? results[1].value : null;
-  return {
-    quota,
-    prompts: promptsResp && Array.isArray(promptsResp.prompts) ? promptsResp.prompts : null,
-    fetchedAt: Date.now(),
-  };
+// Quota refetch interval. Quota changes slowly (per-minute / per-day
+// counters) and Google's quota API can be flaky for exhausted accounts
+// — so we don't tie this to the 5 s status poll. Re-fetch only on
+// expand and at most once per QUOTA_REFRESH_MS even then.
+const QUOTA_REFRESH_MS = 60_000;
+
+// Per-card detail state. Keyed by credentialId, mirrors AcpUI.expanded
+// for the cards that have ever been opened in this session.
+const AcpDetail = {
+  // credentialId → {
+  //   quota, quotaFetchedAt, quotaError,
+  //   promptsHash, lastPromptCount, prompts,
+  //   inFlight: Promise | null
+  // }
+  state: new Map(),
+};
+
+function getDetailState(credentialId) {
+  let s = AcpDetail.state.get(credentialId);
+  if (!s) {
+    s = {
+      quota: undefined,
+      quotaFetchedAt: 0,
+      quotaError: null,
+      promptsHash: '',
+      lastPromptCount: -1,
+      prompts: null,
+      inFlightQuota: null,
+      inFlightPrompts: null,
+    };
+    AcpDetail.state.set(credentialId, s);
+  }
+  return s;
 }
 
-async function refreshAcpWorkerDetailDom(credentialId) {
-  // Re-fetch + repaint the detail body for one open worker. Called
-  // when the user expands the worker, and on every poll tick for
-  // already-open workers.
-  const card = document.querySelector('details.acp-worker[data-cred="' + cssEscape(credentialId) + '"]');
-  if (!card) return;
-  const quotaHost = card.querySelector('[data-quota-host]');
-  const promptsHost = card.querySelector('[data-prompts-host]');
-  let detail;
-  try {
-    detail = await fetchAcpWorkerDetail(credentialId);
-    AcpUI.detailCache.set(credentialId, detail);
-  } catch (e) {
-    if (quotaHost) quotaHost.innerHTML = '<span class="acp-empty-mini">' + t('acpQuotaError') + '</span>';
-    if (promptsHost) promptsHost.innerHTML = '<div class="acp-empty-mini">' + t('acpRecentError') + '</div>';
+function quotaIsStale(s) {
+  return Date.now() - s.quotaFetchedAt > QUOTA_REFRESH_MS;
+}
+
+function paintQuota(card, s) {
+  const host = card.querySelector('[data-quota-host]');
+  if (!host) return;
+  // Three display states, in order of preference:
+  //   1. We have quota data (possibly stale) → render it. If stale-
+  //      after-error, append a small "(stale)" hint so the operator
+  //      knows the displayed numbers may be out of date.
+  //   2. We have no data ever and the last fetch errored → show the
+  //      error message (e.g. "Resource has been exhausted").
+  //   3. We have no data and no error yet → loading placeholder.
+  let html;
+  if (s.quota) {
+    html = renderAcpQuotaMini(s.quota);
+    if (s.quotaError) {
+      html += ' <span class="acp-empty-mini" style="display:inline-block;padding:0 8px;font-size:11px;font-style:italic">stale: ' + escapeHtml(s.quotaError) + '</span>';
+    }
+  } else if (s.quotaError) {
+    html = '<span class="acp-empty-mini" style="color:var(--red)">' + escapeHtml(s.quotaError) + '</span>';
+  } else {
+    html = '<span class="acp-empty-mini">' + t('acpQuotaLoading') + '</span>';
+  }
+  // Idempotent write: skip the DOM mutation if the rendered HTML
+  // hasn't changed. Eliminates the "every-5-second flicker" the user
+  // sees on cards whose quota fetch is failing repeatedly.
+  if (host.innerHTML !== html) host.innerHTML = html;
+}
+
+function paintPrompts(card, s, nowMs) {
+  const host = card.querySelector('[data-prompts-host]');
+  if (!host) return;
+  let html;
+  if (s.prompts && s.prompts.length > 0) {
+    html = renderAcpPromptList(s.prompts, nowMs);
+  } else if (s.prompts !== null) {
+    // Empty array — worker has no recent prompts.
+    html = '<div class="acp-empty-mini">' + t('acpNoRecentPrompts') + '</div>';
+  } else {
+    // null = haven't fetched yet (first paint after expand).
+    html = '<div class="acp-empty-mini">' + t('acpRecentLoading') + '</div>';
+  }
+  if (host.innerHTML !== html) host.innerHTML = html;
+}
+
+async function fetchQuotaIfStale(credentialId, force) {
+  const s = getDetailState(credentialId);
+  if (!force && !quotaIsStale(s)) return;
+  if (s.inFlightQuota) return s.inFlightQuota; // de-dupe concurrent fetches
+  s.inFlightQuota = (async () => {
+    try {
+      const q = await api('/v1/quotas/' + encodeURIComponent(credentialId));
+      s.quota = q;
+      s.quotaError = null;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      s.quotaError = msg;
+      // Intentionally do NOT clear s.quota — keeping the last
+      // known-good payload prevents the empty-state flicker the
+      // user reported when Google's quota API rejects exhausted
+      // accounts every poll.
+    } finally {
+      s.quotaFetchedAt = Date.now();
+      s.inFlightQuota = null;
+    }
+  })();
+  return s.inFlightQuota;
+}
+
+async function fetchPromptsIfChanged(credentialId, expectedCount) {
+  const s = getDetailState(credentialId);
+  // Only refetch if the worker's recent-prompt count changed since
+  // the last successful fetch. This is what makes the "live
+  // streaming reply" visible without thrashing the DOM every 5 s.
+  if (
+    typeof expectedCount === 'number' &&
+    expectedCount === s.lastPromptCount
+  ) {
     return;
   }
-  const nowMs = Date.now();
-  if (quotaHost) quotaHost.innerHTML = renderAcpQuotaMini(detail.quota);
-  if (promptsHost) promptsHost.innerHTML = renderAcpPromptList(detail.prompts || [], nowMs);
+  if (s.inFlightPrompts) return s.inFlightPrompts;
+  s.inFlightPrompts = (async () => {
+    try {
+      const r = await api('/v1/acp/workers/' + encodeURIComponent(credentialId) + '/recent');
+      const prompts = r && Array.isArray(r.prompts) ? r.prompts : [];
+      s.prompts = prompts;
+      if (typeof expectedCount === 'number') {
+        s.lastPromptCount = expectedCount;
+      } else {
+        s.lastPromptCount = prompts.length;
+      }
+    } catch {
+      // Keep stale prompts on error; next poll will retry.
+    } finally {
+      s.inFlightPrompts = null;
+    }
+  })();
+  return s.inFlightPrompts;
+}
+
+async function refreshAcpWorkerDetailDom(credentialId, opts) {
+  // Repaint the detail body for one open worker. Called on:
+  //   - card expand (force = true)              → fetch both
+  //   - polled status update (force = false)    → fetch only what changed
+  // The cheapest possible idle case (worker open, no new prompts,
+  // quota fresh) does ZERO network I/O and leaves the DOM untouched.
+  const card = document.querySelector('details.acp-worker[data-cred="' + cssEscape(credentialId) + '"]');
+  if (!card) return;
+  const force = !!(opts && opts.force);
+  const expectedPromptCount = opts && typeof opts.expectedPromptCount === 'number'
+    ? opts.expectedPromptCount
+    : undefined;
+
+  const s = getDetailState(credentialId);
+
+  // Initial paint right away from cached state — no waiting for
+  // network I/O.
+  paintQuota(card, s);
+  paintPrompts(card, s, Date.now());
+
+  // Fire fetches in parallel; each one calls its paint function on
+  // success so the visible state stays in sync without us blocking.
+  const tasks = [];
+  if (force || quotaIsStale(s)) {
+    tasks.push(fetchQuotaIfStale(credentialId, force).then(() => paintQuota(card, s)));
+  }
+  if (force || (expectedPromptCount !== undefined && expectedPromptCount !== s.lastPromptCount)) {
+    tasks.push(
+      fetchPromptsIfChanged(credentialId, expectedPromptCount).then(() =>
+        paintPrompts(card, s, Date.now()),
+      ),
+    );
+  }
+  await Promise.allSettled(tasks);
 }
 
 // Lightweight CSS.escape polyfill — older browsers may not have it.
@@ -2053,17 +2188,29 @@ async function loadAcpStatus() {
     for (const id of Array.from(AcpUI.detailCache.keys())) {
       if (!live.has(id)) AcpUI.detailCache.delete(id);
     }
+    for (const id of Array.from(AcpDetail.state.keys())) {
+      if (!live.has(id)) AcpDetail.state.delete(id);
+    }
 
     const nowMs = Date.now();
     reconcileAcpWorkerList(AcpUI.lastWorkers, nowMs);
     updateAcpStatusText();
 
-    // After the DOM is updated, repaint the body of every still-open
-    // worker. This is what gives the user "live" feel for the
-    // currently-streaming prompt.
+    // After the DOM is updated, refresh details for every still-open
+    // worker — but pass each worker's *current* recentPromptCount so
+    // refreshAcpWorkerDetailDom can skip the prompts fetch when
+    // nothing actually changed. Quota refetches at most every
+    // QUOTA_REFRESH_MS regardless. The two together kill the
+    // "every-5-seconds flicker" and the wasted /v1/quotas calls
+    // against exhausted credentials.
+    const workerByCred = new Map();
+    for (const w of AcpUI.lastWorkers) workerByCred.set(w.credentialId, w);
     for (const credentialId of AcpUI.expanded) {
-      // Fire and forget — each detail fetch races independently.
-      void refreshAcpWorkerDetailDom(credentialId);
+      const w = workerByCred.get(credentialId);
+      void refreshAcpWorkerDetailDom(credentialId, {
+        force: false,
+        expectedPromptCount: w ? w.recentPromptCount || 0 : undefined,
+      });
     }
   } catch (e) {
     // Network blip — keep the UI quiet (the dot reflects connectivity
@@ -2142,7 +2289,9 @@ document.addEventListener('toggle', (ev) => {
   if (!cred) return;
   if (target.hasAttribute('open')) {
     AcpUI.expanded.add(cred);
-    void refreshAcpWorkerDetailDom(cred);
+    // First open: force fetch of both quota and prompts. Subsequent
+    // poll-driven refreshes will skip whatever hasn't changed.
+    void refreshAcpWorkerDetailDom(cred, { force: true });
   } else {
     AcpUI.expanded.delete(cred);
   }
