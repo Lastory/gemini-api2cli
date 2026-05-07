@@ -58,7 +58,6 @@ import { openaiAdapter } from './adapters/openaiAdapter.js';
 import { logBuffer, type LogEntry } from './logBuffer.js';
 import {
   AcpProcessPool,
-  type AcpWorker,
   type ContentBlock,
   type SessionNotification,
 } from './acpProcessPool.js';
@@ -2924,33 +2923,27 @@ export function createPromptApiRouter(
     });
   });
 
-  // Health-check a single credential without invoking the
-  // retry / failover machinery. Differs from POSTing to
-  // /v1/openai/chat/completions in three important ways:
+  // Health-check a single credential by calling Google's
+  // cloudcode-pa.googleapis.com/v1internal:loadCodeAssist
+  // endpoint *directly* — no CLI subprocess, no ACP, no retry
+  // loops. This was a deliberate move away from the previous
+  // CLI-based implementation:
   //
-  //   1. Targets the requested credential directly. The OpenAI
-  //      endpoint silently fails-over to other credentials, so a
-  //      "test" of a broken credential might "succeed" by silently
-  //      using a working one — useless as a health check.
+  //   - The CLI swallows upstream 429s by either retrying
+  //     internally for 30+ s or resolving prompt() with an empty
+  //     reply and stopReason='end_turn'/'cancelled'. Either way
+  //     the operator never sees the actual quotaResetTimeStamp.
+  //   - Direct HTTPS gives us the raw Google response, including
+  //     RESOURCE_EXHAUSTED + ErrorInfo metadata, in <1 s.
+  //   - loadCodeAssist consumes negligible quota (it's a profile
+  //     introspection RPC, not a generation call).
   //
-  //   2. No retries. The OpenAI endpoint loops up to retryCount+1
-  //      times. Stacked behind Cloudflare's hard 100 s edge timeout
-  //      (Free / Pro plans), a slow-failing credential would push
-  //      the response past the timeout — Cloudflare returns a 524
-  //      HTML page and the admin console crashes with a non-JSON
-  //      error.
-  //
-  //   3. 30 s server-side cap. We race the prompt against a
-  //      timeout so even a wedged credential surfaces a clean
-  //      "timed out" error to the operator instead of a CF 524.
-  //      The prompt is cancelled so the underlying CLI process
-  //      doesn't keep doing work on a dropped request.
-  // 15 s is comfortable for any healthy credential — typical Gemini
-  // round-trip is 1-3 s. Anything slower is a near-certain credential
-  // health issue (the CLI subprocess retries 429 errors internally,
-  // eating into our window), and a faster test → faster feedback for
-  // the operator. Still well under Cloudflare's 100 s edge timeout.
-  const TEST_TIMEOUT_MS = 15_000;
+  // The same OAuth client and refresh-token machinery the rest
+  // of the codebase uses is reused here, so we don't duplicate
+  // token-refresh logic.
+  const TEST_TIMEOUT_MS = 10_000;
+  const CODE_ASSIST_BASE_URL = 'https://cloudcode-pa.googleapis.com';
+  const TEST_API_PATH = '/v1internal:loadCodeAssist';
   router.post('/v1/credentials/:credentialId/test', async (req, res) => {
     const credentialId = req.params['credentialId'];
     if (typeof credentialId !== 'string' || !credentialId) {
@@ -2967,11 +2960,7 @@ export function createPromptApiRouter(
     // Short-circuit: if we already know this credential is in
     // cooldown (auth failure or quota exhausted on a previous real
     // request), skip the API round-trip and return the recorded
-    // cooldown info immediately. This avoids wasting 15 s of the
-    // operator's time waiting on a CLI subprocess that's just going
-    // to retry an already-known-bad credential, and gives them an
-    // actionable status ("cooldown until X") instead of a generic
-    // "unhealthy".
+    // cooldown info immediately.
     const existingCooldowns = extractCooldownsForCredential(state, credentialId);
     if (existingCooldowns.length > 0) {
       const wide = existingCooldowns.find((c) => c.model === '*');
@@ -2991,267 +2980,203 @@ export function createPromptApiRouter(
     }
 
     const requestModel = state.currentModel;
-    const homeDir = state.credentialStore.getCredentialHomeDir(credentialId);
     const startTime = Date.now();
-    let worker: AcpWorker | undefined;
-    let sessionId: string | undefined;
-    // Holds a reference to the underlying prompt() promise so we can
-    // continue awaiting it in the background after a user-facing
-    // timeout — see "post-mortem" comment below.
-    let promptPromise: Promise<string> | undefined;
-    // Captured by the prompt() callback. Used by the post-mortem to
-    // distinguish "real success with content" from "empty success
-    // because CLI swallowed an upstream 429".
-    let stopReason: string | undefined;
-    // Snapshot of the worker's stderr-tail buffer right before
-    // we issue the prompt. The post-mortem subtracts this from
-    // the post-prompt stderr so it sees only what *this* test
-    // generated (avoids false positives from prior turns).
-    let stderrAtStart = '';
-    // Set by the post-mortem path to claim ownership of session
-    // cleanup. When true, the finally block will NOT destroy the
-    // session — the post-mortem will do it after the CLI naturally
-    // settles, so we don't race the CLI's state machine.
-    let postMortemOwnsCleanup = false;
+    const homeDir = state.credentialStore.getCredentialHomeDir(credentialId);
+    const oauthPath = getPromptCredentialOauthPath(homeDir);
+
+    // Sanity: missing oauth_creds.json means the credential was
+    // never completed (mid-flow login that got abandoned). Tell
+    // the operator to re-login rather than punching at Google.
+    if (!existsSync(oauthPath)) {
+      return res.status(200).json({
+        ok: false,
+        credentialId,
+        durationMs: 0,
+        error:
+          'oauth_creds.json missing for this credential — login was never completed. Delete and re-add.',
+      });
+    }
 
     try {
-      worker = await state.acpPool.getOrCreate(credentialId, homeDir, {
-        idleTimeoutMs: state.settings.acpIdleTimeoutMs,
-        mcpEnabled: state.settings.mcpEnabled,
-        extensionsEnabled: state.settings.extensionsEnabled,
-        skillsEnabled: state.settings.skillsEnabled,
-        proxyUrl: state.settings.proxyUrl,
-        maxWorkers: state.settings.maxWorkers,
-        failoverWorkers: state.settings.failoverWorkers,
-        keepaliveIntervalMs: state.settings.acpKeepaliveIntervalMs,
-      });
-      sessionId = await worker.createSession();
+      // Load + refresh OAuth credentials. Reuses the same client
+      // factory the rest of this file uses for credential rotation,
+      // so proxy / scope / refresh logic stay identical.
+      const rawOauth = readFileSync(oauthPath, 'utf8');
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      const credentials = JSON.parse(rawOauth) as Credentials;
+      const client = createPromptCredentialOAuthClient(state.settings.proxyUrl);
+      client.setCredentials(credentials);
 
-      let reply = '';
-      stderrAtStart = worker.getStderrTail();
-      // Closure-capture the locals we need inside the race promise so
-      // TypeScript's narrowing doesn't lose them across the await.
-      const w = worker;
-      const sid = sessionId;
-      promptPromise = w
-        .prompt(
-          sid,
-          [{ type: 'text', text: 'Reply with "ok".' }],
-          (update) => {
-            const u = update.update;
-            if (
-              u.sessionUpdate === 'agent_message_chunk' &&
-              u.content.type === 'text' &&
-              typeof u.content.text === 'string'
-            ) {
-              reply += u.content.text;
-            }
-          },
-        )
-        .then((response) => {
-          stopReason = response.stopReason;
-          return reply;
-        });
-
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(
-          () =>
-            reject(
-              new Error(
-                `No reply within ${TEST_TIMEOUT_MS / 1000}s — credential is likely unhealthy (quota exhausted, expired token, or upstream down). Check container logs for the underlying error.`,
-              ),
-            ),
-          TEST_TIMEOUT_MS,
-        );
-      });
-
-      const out = await Promise.race([promptPromise, timeoutPromise]);
-      const durationMs = Date.now() - startTime;
-      return res.status(200).json({
-        ok: true,
-        credentialId,
-        durationMs,
-        reply: out.slice(0, 200),
-      });
-    } catch (err) {
-      const durationMs = Date.now() - startTime;
-      // ── Post-mortem: capture the real failure reason ──
-      //
-      // We deliberately DO NOT call cancelPrompt here. Cancelling
-      // the CLI cleanly returns stopReason=cancelled with empty
-      // stderr — i.e., we throw away the diagnostic information
-      // we actually need to detect the 429 / RESOURCE_EXHAUSTED
-      // condition. So instead we let the CLI keep running in the
-      // background; eventually it'll either:
-      //
-      //   A. Reject prompt() with a stringified error → we parse it.
-      //   B. Resolve prompt() with empty reply but stderr now full
-      //      of the real Google error → we scrape stderr for the
-      //      RESOURCE_EXHAUSTED details and quotaResetTimeStamp.
-      //   C. Eventually succeed (CLI's internal retry recovered) →
-      //      log "credential is healthy; cooldown not applied".
-      //
-      // The destroySession call is moved to the post-mortem too,
-      // so it runs only after the CLI naturally settles. Otherwise
-      // destroying mid-flight would race with the CLI's own state
-      // machine and could cause spurious errors on the next turn.
-      //
-      // Risk: if every test fails, we accumulate background prompts
-      // up to maxWorkers × <CLI internal retry budget>. Acceptable —
-      // operator triggered manually and CLI gives up in <60 s.
-      if (promptPromise && worker && sessionId) {
-        postMortemOwnsCleanup = true;
-        const credIdSnapshot = credentialId;
-        const modelSnapshot = requestModel;
-        const workerSnapshot: AcpWorker = worker;
-        const sidSnapshot = sessionId;
-        const stderrAnchor = stderrAtStart;
-        // Cleanup helper — runs after the prompt has actually
-        // settled, so we never destroy a session out from under
-        // an in-flight CLI request.
-        const tearDown = (): void => {
-          try {
-            workerSnapshot.destroySession(sidSnapshot);
-          } catch {
-            /* destroySession is best-effort; if the session is
-               already gone we don't care. */
-          }
-        };
-        void promptPromise.then(
-          (replyText) => {
-            // Slice off any stderr that was already buffered
-            // before this test — focus on what this prompt produced.
-            const stderrAll = workerSnapshot.getStderrTail();
-            const newStderr = stderrAll.startsWith(stderrAnchor)
-              ? stderrAll.slice(stderrAnchor.length)
-              : stderrAll;
-
-            // Heuristic for "success" vs "silent failure":
-            //   - non-empty reply  → real success, cred is healthy
-            //   - empty reply      → CLI swallowed an upstream error
-            //   - stopReason !== 'end_turn' on empty also implicates
-            const looksHealthy =
-              replyText.trim().length > 0 && stopReason === 'end_turn';
-
-            if (looksHealthy) {
-              logger.info(
-                `[ACP] Test post-mortem: credential ${credIdSnapshot} eventually succeeded (CLI internal retry recovered after our ${TEST_TIMEOUT_MS / 1000}s timeout). Reply length=${replyText.length}, stopReason=${stopReason}. Credential is healthy; cooldown not applied.`,
-              );
-              tearDown();
-              return;
-            }
-
-            // Empty / unusual response. Scrape the stderr buffer
-            // for the most informative line — usually contains a
-            // JSON blob with the real RESOURCE_EXHAUSTED status.
-            const cooldownMs = parseQuotaResetMs(newStderr);
-            const sample = newStderr.trim().split('\n').slice(-5).join(' | ');
-            logger.warn(
-              `[ACP] Test post-mortem: credential ${credIdSnapshot} resolved with empty reply (length=${replyText.length}, stopReason=${stopReason ?? 'unknown'}). Scraping stderr — last lines: ${sample.slice(0, 400)}`,
-            );
-
-            if (typeof cooldownMs === 'number' && cooldownMs > Date.now()) {
-              // Synthesize a fake error string so applyCredential
-              // Cooldown's existing parsers (status code, message
-              // text) can pick the right cooldown duration. We
-              // pass the matched stderr fragment so log lines
-              // remain attributable to the real upstream message.
-              const synthErr = new Error(newStderr.slice(-2048));
-              applyCredentialCooldown(
-                state,
-                credIdSnapshot,
-                modelSnapshot,
-                synthErr,
-              );
-            } else if (
-              /\b(429|RESOURCE_EXHAUSTED|quota|rate.?limit)\b/i.test(newStderr)
-            ) {
-              // Stderr clearly mentions quota but no parsable
-              // timestamp — fall back to applyCredentialCooldown's
-              // 4 h default. Pass the synthesized error so the
-              // status-code path inside applyCredentialCooldown
-              // picks the quota branch.
-              const synthErr = new Error(
-                'RESOURCE_EXHAUSTED (inferred from CLI stderr): ' +
-                  newStderr.slice(-1024),
-              );
-              applyCredentialCooldown(
-                state,
-                credIdSnapshot,
-                modelSnapshot,
-                synthErr,
-              );
-            } else {
-              // Empty reply but no quota markers in stderr — apply
-              // a short conservative cooldown (CREDENTIAL_COOLDOWN_MS
-              // = 60 s) so we don't keep slamming an obviously sick
-              // credential on every test, but recover quickly if it
-              // was just a hiccup.
-              const synthErr = new Error(
-                'CLI returned empty reply (likely upstream error swallowed by CLI): ' +
-                  newStderr.slice(-512),
-              );
-              applyCredentialCooldown(
-                state,
-                credIdSnapshot,
-                modelSnapshot,
-                synthErr,
-              );
-            }
-            tearDown();
-          },
-          (postErr: unknown) => {
-            const postMsg = extractErrorMessage(postErr);
-            logger.info(
-              `[ACP] Test post-mortem: credential ${credIdSnapshot} failed with: ${postMsg.slice(0, 300)}`,
-            );
-            if (isCredentialFailoverError(postErr)) {
-              applyCredentialCooldown(
-                state,
-                credIdSnapshot,
-                modelSnapshot,
-                postErr,
-              );
-            }
-            tearDown();
-          },
-        );
+      // getAccessToken() refreshes via refresh_token if the access
+      // token is expired or missing. Throws on permanent failures
+      // (e.g. revoked refresh_token).
+      const tokenResult = await client.getAccessToken();
+      const accessToken = tokenResult.token;
+      if (!accessToken) {
+        throw new Error('OAuth access token unavailable after refresh');
       }
-      // If promptPromise was never created (getOrCreate or
-      // createSession threw before we issued the prompt), the
-      // outer finally handles destroySession because
-      // postMortemOwnsCleanup stayed false.
 
-      // Return 200 with ok:false so the admin console frontend
-      // surfaces the error as a credential-level fault, not a
-      // transport error. Transport errors should be reserved for
-      // genuine API misuse (400) or server bugs (500).
+      // Direct call to cloudcode-pa.googleapis.com. We use
+      // OAuth2Client.request — same gaxios transporter the rest of
+      // the codebase uses, so proxy and timeouts are honored.
+      // Setting `validateStatus` to always-true so a non-2xx is
+      // returned as a structured response instead of throwing,
+      // which lets us inspect the body for quotaResetTimeStamp.
+      let httpStatus = 0;
+      let httpBody: unknown = null;
+      try {
+        const result = await client.request({
+          method: 'POST',
+          url: `${CODE_ASSIST_BASE_URL}${TEST_API_PATH}`,
+          headers: { 'Content-Type': 'application/json' },
+          data: { metadata: { ideType: 'IDE_UNSPECIFIED' } },
+          timeout: TEST_TIMEOUT_MS,
+          // Don't auto-throw on 4xx/5xx — we need the body to
+          // extract Google's RESOURCE_EXHAUSTED metadata.
+          validateStatus: () => true,
+        });
+        httpStatus = result.status;
+        httpBody = result.data;
+      } catch (httpErr: unknown) {
+        // Network-level failure (timeout, DNS, TLS). Distinguish
+        // these from API-level errors so we don't penalize the
+        // credential for an upstream blip.
+        const errMsg = extractErrorMessage(httpErr);
+        const durationMs = Date.now() - startTime;
+        const looksLikeTimeout = /\b(timeout|aborted|ECONNRESET|ETIMEDOUT)\b/i.test(
+          errMsg,
+        );
+        return res.status(200).json({
+          ok: false,
+          credentialId,
+          durationMs,
+          error: looksLikeTimeout
+            ? `Network error reaching ${CODE_ASSIST_BASE_URL}: ${errMsg}. Check VPS internet / proxy settings.`
+            : `Failed to call ${TEST_API_PATH}: ${errMsg}`,
+        });
+      }
+
+      const durationMs = Date.now() - startTime;
+      const bodyText = typeof httpBody === 'string' ? httpBody : JSON.stringify(httpBody ?? {});
+
+      // ── 200: healthy ─────────────────────────────────────────────
+      if (httpStatus === 200) {
+        // Try to surface tier / credit info so the operator gets a
+        // richer "ok" message. Stringify-fallback if the body shape
+        // doesn't match what we expect — the test still passes.
+        let tier = '';
+        if (isRecord(httpBody)) {
+          const paid = httpBody['paidTier'];
+          const current = httpBody['currentTier'];
+          if (isRecord(paid)) {
+            const paidId = paid['id'];
+            if (typeof paidId === 'string') tier = paidId;
+          }
+          if (!tier && isRecord(current)) {
+            const currentId = current['id'];
+            if (typeof currentId === 'string') tier = currentId;
+          }
+        }
+        return res.status(200).json({
+          ok: true,
+          credentialId,
+          durationMs,
+          reply: tier ? `OK — tier=${tier}` : 'OK',
+        });
+      }
+
+      // ── 429: quota exhausted ─────────────────────────────────────
+      // Use the existing parser to extract Google's
+      // quotaResetTimeStamp and apply a precise cooldown.
+      if (httpStatus === 429) {
+        const synthErr = new Error(`HTTP 429: ${bodyText}`);
+        applyCredentialCooldown(state, credentialId, requestModel, synthErr);
+        const updatedCooldowns = extractCooldownsForCredential(
+          state,
+          credentialId,
+        );
+        const lead = updatedCooldowns.find((c) => c.model === requestModel);
+        const remaining = lead
+          ? `${Math.ceil(lead.secondsRemaining / 60)} min`
+          : 'unknown';
+        return res.status(200).json({
+          ok: false,
+          credentialId,
+          durationMs,
+          error: `Quota exhausted (HTTP 429) — recovers in ${remaining}`,
+          cooldowns: updatedCooldowns,
+        });
+      }
+
+      // ── 400/401/403: auth failure ────────────────────────────────
+      // Permanent — operator needs to re-login. Apply a credential-
+      // wide cooldown (model='*') for the standard 4 h, which the
+      // admin console renders as a red "re-login needed" badge.
+      if (httpStatus === 400 || httpStatus === 401 || httpStatus === 403) {
+        const synthErr = new Error(`HTTP ${httpStatus}: ${bodyText}`);
+        applyCredentialCooldown(state, credentialId, requestModel, synthErr);
+        const updatedCooldowns = extractCooldownsForCredential(
+          state,
+          credentialId,
+        );
+        return res.status(200).json({
+          ok: false,
+          credentialId,
+          durationMs,
+          error: `Auth error (HTTP ${httpStatus}) — credential is invalid or revoked. Delete and re-add.`,
+          cooldowns: updatedCooldowns,
+        });
+      }
+
+      // ── 5xx: upstream error ──────────────────────────────────────
+      // Don't penalize the credential for Google's bad day.
+      if (httpStatus >= 500 && httpStatus < 600) {
+        return res.status(200).json({
+          ok: false,
+          credentialId,
+          durationMs,
+          error: `Upstream error (HTTP ${httpStatus}). Google had a hiccup, credential is fine.`,
+        });
+      }
+
+      // Unexpected status (rare).
       return res.status(200).json({
         ok: false,
         credentialId,
         durationMs,
-        error: err instanceof Error ? err.message : String(err),
-        // Hint that we're going to record cooldown info shortly
-        // (empty if we already had recorded ones — those would have
-        // hit the short-circuit above). Lets the frontend prompt
-        // the user to refresh in ~30 s.
-        postMortemPending: true,
+        error: `Unexpected HTTP ${httpStatus} from loadCodeAssist: ${bodyText.slice(0, 200)}`,
       });
-    } finally {
-      // The post-mortem path takes ownership of cleanup so the CLI
-      // can finish its in-flight retry naturally — destroying the
-      // session mid-flight would race the CLI's own state machine
-      // and could lose the stderr we need to extract 429 info.
-      // The success path (and the "couldn't even start" branch)
-      // both fall through here and clean up immediately.
-      if (worker && sessionId && !postMortemOwnsCleanup) {
-        try {
-          worker.destroySession(sessionId);
-        } catch {
-          /* destroySession is best-effort; if the session is
-             already gone we don't care. */
-        }
+    } catch (err) {
+      const durationMs = Date.now() - startTime;
+      const errMsg = err instanceof Error ? err.message : String(err);
+      // OAuth refresh failures end up here. invalid_grant /
+      // refresh_token_expired surface as auth failures so the
+      // credential card flips to "re-login needed".
+      if (
+        /invalid_grant|refresh_token_expired|invalid_refresh_token/i.test(
+          errMsg,
+        )
+      ) {
+        applyCredentialCooldown(
+          state,
+          credentialId,
+          requestModel,
+          new Error(`HTTP 401: ${errMsg}`),
+        );
+        return res.status(200).json({
+          ok: false,
+          credentialId,
+          durationMs,
+          error: `OAuth refresh failed: ${errMsg}. Re-login required.`,
+          cooldowns: extractCooldownsForCredential(state, credentialId),
+        });
       }
+      return res.status(200).json({
+        ok: false,
+        credentialId,
+        durationMs,
+        error: errMsg,
+      });
     }
   });
 
