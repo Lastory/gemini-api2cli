@@ -1542,31 +1542,35 @@ async function testCredential(credentialId) {
   if (btn) { btn.disabled = true; btn.innerHTML = '<span style="display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:4px"></span>' + t('testing'); }
   if (resultEl) { resultEl.className = 'cred-test-result'; resultEl.textContent = ''; }
   try {
-    // Temporarily switch to this credential, send a minimal request, then restore
-    const prevCred = S.lastCreds?.currentCredentialId;
-    if (prevCred !== credentialId) {
-      await api('/v1/credentials/current',{method:'PUT',body:JSON.stringify({credentialId})});
-    }
-    const result = await api('/v1/openai/chat/completions',{
-      method:'POST',
-      body:JSON.stringify({messages:[{role:'user',content:'Hi'}],max_tokens:1}),
+    // Use the dedicated per-credential health-check endpoint. Unlike
+    // /v1/openai/chat/completions, this:
+    //   - Tests THIS credential only (no silent failover to other
+    //     credentials, which would make a broken credential appear
+    //     to "work").
+    //   - Doesn't retry, so a slow-failing credential won't stack
+    //     up four 25 s attempts and trip Cloudflare's 100 s timeout
+    //     (the "Cloudflare returned HTTP 524" bug).
+    //   - Has a 30 s server-side cap; the response always comes
+    //     back well inside any proxy timeout.
+    // The response always has shape { ok, durationMs, reply | error }
+    // and HTTP status is 200 for credential faults — only true
+    // transport problems surface as exceptions here.
+    const r = await api('/v1/credentials/' + encodeURIComponent(credentialId) + '/test', {
+      method: 'POST',
     });
-    if (prevCred && prevCred !== credentialId) {
-      await api('/v1/credentials/current',{method:'PUT',body:JSON.stringify({credentialId:prevCred})}).catch(()=>{});
-    }
-    const text = result?.choices?.[0]?.message?.content || '';
     if (resultEl) {
-      resultEl.className = 'cred-test-result test-ok';
-      resultEl.textContent = t('testSuccess') + (text ? ' — ' + text.slice(0,80) : '');
+      if (r && r.ok) {
+        resultEl.className = 'cred-test-result test-ok';
+        const reply = (r.reply || '').trim();
+        const dur = typeof r.durationMs === 'number' ? ' (' + (r.durationMs / 1000).toFixed(1) + 's)' : '';
+        resultEl.textContent = t('testSuccess') + dur + (reply ? ' — ' + reply.slice(0, 80) : '');
+      } else {
+        resultEl.className = 'cred-test-result test-err';
+        const dur = r && typeof r.durationMs === 'number' ? ' (' + (r.durationMs / 1000).toFixed(1) + 's)' : '';
+        resultEl.textContent = (r && r.error ? r.error : 'Test failed') + dur;
+      }
     }
   } catch(e) {
-    // Try to restore previous credential even on error
-    try {
-      const prevCred = S.lastCreds?.currentCredentialId;
-      if (prevCred && prevCred !== credentialId) {
-        await api('/v1/credentials/current',{method:'PUT',body:JSON.stringify({credentialId:prevCred})});
-      }
-    } catch(_) {}
     const msg = e instanceof Error ? e.message : String(e);
     if (resultEl) {
       resultEl.className = 'cred-test-result test-err';
@@ -1953,6 +1957,87 @@ function setAcpLiveDot(on) {
   dot.classList.toggle('off', !on);
 }
 
+// Update one worker card's summary fields in place without touching
+// its <details>.open state or its body. This is what makes auto-poll
+// flicker-free: the DOM nodes the user is interacting with (expanded
+// cards, scroll positions, focus) survive the refresh.
+function updateAcpWorkerSummaryInPlace(card, w, nowMs) {
+  const stateEl = card.querySelector('.acp-worker-state');
+  if (stateEl) {
+    stateEl.className = 'acp-worker-state s-' + (w.state || 'unknown');
+    stateEl.textContent = w.state || '';
+  }
+  // The three meta spans appear in a fixed order in the rendered
+  // template: sessions, recent prompts, last-activity. We rely on
+  // that ordering rather than per-element data-attrs to keep the
+  // template tiny.
+  const metas = card.querySelectorAll('.acp-worker-summary > .acp-worker-meta');
+  if (metas[0]) {
+    metas[0].textContent = (w.sessionCount || 0) + ' ' + t('acpSessions2');
+  }
+  if (metas[1]) {
+    const recentLabel = (w.recentPromptCount || 0) + ' ' + t('acpRecentPrompts').toLowerCase();
+    metas[1].textContent = recentLabel;
+  }
+  if (metas[2]) {
+    const lastAct = w.lastActivity
+      ? formatRelative(w.lastActivity, nowMs) + t('acpAgo')
+      : '—';
+    metas[2].textContent = lastAct;
+  }
+}
+
+// Reconcile the current worker list against fresh data from
+// /v1/acp/status. Adds new cards, removes gone ones, and updates
+// summaries on the rest — all without touching the body of any
+// expanded card. The body content is owned by
+// refreshAcpWorkerDetailDom which fires independently.
+function reconcileAcpWorkerList(workers, nowMs) {
+  const list = $('acp-sessions-list');
+  if (!list) return;
+
+  if (workers.length === 0) {
+    list.innerHTML = '<div class="acp-empty-mini">' + t('acpNoWorkers') + '</div>';
+    return;
+  }
+
+  // If the previous render was an empty-state placeholder (or anything
+  // other than worker cards), wipe and start clean. Otherwise diff in
+  // place.
+  const placeholder = list.querySelector('.acp-empty-mini');
+  if (placeholder) placeholder.remove();
+
+  // Index existing cards by credentialId so we can match them to the
+  // incoming worker list in one pass.
+  const existing = new Map();
+  for (const card of list.querySelectorAll('details.acp-worker')) {
+    const cred = card.getAttribute('data-cred');
+    if (cred) existing.set(cred, card);
+  }
+
+  const seen = new Set();
+  for (const w of workers) {
+    seen.add(w.credentialId);
+    const old = existing.get(w.credentialId);
+    if (old) {
+      updateAcpWorkerSummaryInPlace(old, w, nowMs);
+    } else {
+      // New worker — append a freshly rendered card. Use a template
+      // shell so we get the actual <details> element rather than a
+      // string fragment that needs further parsing.
+      const tmp = document.createElement('div');
+      tmp.innerHTML = renderAcpWorker(w, nowMs);
+      const newCard = tmp.firstElementChild;
+      if (newCard) list.appendChild(newCard);
+    }
+  }
+
+  // Drop cards whose worker is gone (credential deleted, idle-evicted).
+  for (const [cred, card] of existing) {
+    if (!seen.has(cred)) card.remove();
+  }
+}
+
 async function loadAcpStatus() {
   try {
     const st = await api('/v1/acp/status');
@@ -1969,14 +2054,8 @@ async function loadAcpStatus() {
       if (!live.has(id)) AcpUI.detailCache.delete(id);
     }
 
-    const el = $('acp-sessions-list');
-    if (!el) return;
-    if (AcpUI.lastWorkers.length === 0) {
-      el.innerHTML = '<div class="acp-empty-mini">' + t('acpNoWorkers') + '</div>';
-    } else {
-      const nowMs = Date.now();
-      el.innerHTML = AcpUI.lastWorkers.map(w => renderAcpWorker(w, nowMs)).join('');
-    }
+    const nowMs = Date.now();
+    reconcileAcpWorkerList(AcpUI.lastWorkers, nowMs);
     updateAcpStatusText();
 
     // After the DOM is updated, repaint the body of every still-open

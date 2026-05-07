@@ -58,6 +58,7 @@ import { openaiAdapter } from './adapters/openaiAdapter.js';
 import { logBuffer, type LogEntry } from './logBuffer.js';
 import {
   AcpProcessPool,
+  type AcpWorker,
   type ContentBlock,
   type SessionNotification,
 } from './acpProcessPool.js';
@@ -2570,6 +2571,138 @@ export function createPromptApiRouter(
       credentialId,
       prompts: state.acpPool.getRecentPrompts(credentialId),
     });
+  });
+
+  // Health-check a single credential without invoking the
+  // retry / failover machinery. Differs from POSTing to
+  // /v1/openai/chat/completions in three important ways:
+  //
+  //   1. Targets the requested credential directly. The OpenAI
+  //      endpoint silently fails-over to other credentials, so a
+  //      "test" of a broken credential might "succeed" by silently
+  //      using a working one — useless as a health check.
+  //
+  //   2. No retries. The OpenAI endpoint loops up to retryCount+1
+  //      times. Stacked behind Cloudflare's hard 100 s edge timeout
+  //      (Free / Pro plans), a slow-failing credential would push
+  //      the response past the timeout — Cloudflare returns a 524
+  //      HTML page and the admin console crashes with a non-JSON
+  //      error.
+  //
+  //   3. 30 s server-side cap. We race the prompt against a
+  //      timeout so even a wedged credential surfaces a clean
+  //      "timed out" error to the operator instead of a CF 524.
+  //      The prompt is cancelled so the underlying CLI process
+  //      doesn't keep doing work on a dropped request.
+  const TEST_TIMEOUT_MS = 30_000;
+  router.post('/v1/credentials/:credentialId/test', async (req, res) => {
+    const credentialId = req.params['credentialId'];
+    if (typeof credentialId !== 'string' || !credentialId) {
+      return res.status(400).json({ error: 'Invalid credential ID' });
+    }
+    const credential =
+      await state.credentialStore.getCredential(credentialId);
+    if (!credential) {
+      return res
+        .status(404)
+        .json({ error: `Credential not found: ${credentialId}` });
+    }
+
+    const homeDir = state.credentialStore.getCredentialHomeDir(credentialId);
+    const startTime = Date.now();
+    let worker: AcpWorker | undefined;
+    let sessionId: string | undefined;
+
+    try {
+      worker = await state.acpPool.getOrCreate(credentialId, homeDir, {
+        idleTimeoutMs: state.settings.acpIdleTimeoutMs,
+        mcpEnabled: state.settings.mcpEnabled,
+        extensionsEnabled: state.settings.extensionsEnabled,
+        skillsEnabled: state.settings.skillsEnabled,
+        proxyUrl: state.settings.proxyUrl,
+        maxWorkers: state.settings.maxWorkers,
+        failoverWorkers: state.settings.failoverWorkers,
+        keepaliveIntervalMs: state.settings.acpKeepaliveIntervalMs,
+      });
+      sessionId = await worker.createSession();
+
+      let reply = '';
+      // Closure-capture the locals we need inside the race promise so
+      // TypeScript's narrowing doesn't lose them across the await.
+      const w = worker;
+      const sid = sessionId;
+      const promptPromise = w
+        .prompt(
+          sid,
+          [{ type: 'text', text: 'Reply with "ok".' }],
+          (update) => {
+            const u = update.update;
+            if (
+              u.sessionUpdate === 'agent_message_chunk' &&
+              u.content.type === 'text' &&
+              typeof u.content.text === 'string'
+            ) {
+              reply += u.content.text;
+            }
+          },
+        )
+        .then(() => reply);
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Credential test timed out after ${TEST_TIMEOUT_MS / 1000}s`,
+              ),
+            ),
+          TEST_TIMEOUT_MS,
+        );
+      });
+
+      const out = await Promise.race([promptPromise, timeoutPromise]);
+      const durationMs = Date.now() - startTime;
+      return res.status(200).json({
+        ok: true,
+        credentialId,
+        durationMs,
+        reply: out.slice(0, 200),
+      });
+    } catch (err) {
+      const durationMs = Date.now() - startTime;
+      // Best-effort cancel — the prompt may still be in flight
+      // inside the CLI subprocess. Race a short timeout so a
+      // wedged cancel doesn't itself become the bottleneck.
+      if (worker && sessionId) {
+        try {
+          await Promise.race([
+            worker.cancelPrompt(sessionId),
+            new Promise<void>((resolve) => setTimeout(resolve, 3_000)),
+          ]);
+        } catch {
+          /* best-effort cleanup */
+        }
+      }
+      // Return 200 with ok:false so the admin console frontend
+      // surfaces the error as a credential-level fault, not a
+      // transport error. Transport errors should be reserved for
+      // genuine API misuse (400) or server bugs (500).
+      return res.status(200).json({
+        ok: false,
+        credentialId,
+        durationMs,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      if (worker && sessionId) {
+        try {
+          worker.destroySession(sessionId);
+        } catch {
+          /* destroySession is best-effort; if the session is
+             already gone we don't care. */
+        }
+      }
+    }
   });
 
   // --- Logs panel endpoints ----------------------------------------------
