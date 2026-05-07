@@ -1,0 +1,79 @@
+# Production Dockerfile for @google/gemini-cli-a2a-server
+#
+# Multi-stage build: compiles TypeScript inside the image so the host
+# doesn't need Node installed. Heavier first build than `Dockerfile.a2a`
+# (~3-5 min vs ~30s) but avoids the "stale dist on host" footgun where
+# `git checkout` doesn't touch ignored `dist/` directories — the source
+# of the joshua.litt-removed-but-still-imported crash on upgrade.
+#
+# Use this when:
+#   - The host doesn't have Node 20+ installed
+#   - You want reproducible builds tied to the git tree only
+#   - You want to avoid forgetting to `npm run build` between upgrades
+#
+# Switch by setting `dockerfile: Dockerfile.a2a.prod` in docker-compose.yml.
+
+# ─── Builder stage ────────────────────────────────────────────────
+FROM node:20-slim AS builder
+WORKDIR /build
+
+# Copy package metadata first so Docker can cache the npm install layer
+# across source-only changes.
+COPY package.json package-lock.json ./
+COPY packages/core/package.json packages/core/
+COPY packages/cli/package.json packages/cli/
+COPY packages/devtools/package.json packages/devtools/
+COPY packages/a2a-server/package.json packages/a2a-server/
+COPY packages/sdk/package.json packages/sdk/
+COPY packages/test-utils/package.json packages/test-utils/
+COPY packages/vscode-ide-companion/package.json packages/vscode-ide-companion/
+
+# Install all workspace deps (including devDependencies — TS toolchain).
+# --ignore-scripts skips the husky/bundle prepare hooks which would try
+# to rebuild things we haven't copied yet.
+RUN npm ci --ignore-scripts
+
+# Now copy the actual source and build in dependency order:
+#   core → devtools → cli → a2a-server.
+COPY . .
+RUN npm run build --workspace @google/gemini-cli-core \
+ && npm run build --workspace @google/gemini-cli-devtools \
+ && npm run build --workspace @google/gemini-cli \
+ && npm run build --workspace @google/gemini-cli-a2a-server
+
+# ─── Runtime stage ────────────────────────────────────────────────
+FROM node:20-slim AS runtime
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    CODER_AGENT_PORT=41242 \
+    CODER_AGENT_HOST=0.0.0.0
+
+# Re-install only runtime deps (no devDependencies). Identical lockfile
+# means every prod image gets the exact same dependency tree.
+COPY package.json package-lock.json ./
+COPY packages/core/package.json packages/core/
+COPY packages/cli/package.json packages/cli/
+COPY packages/devtools/package.json packages/devtools/
+COPY packages/a2a-server/package.json packages/a2a-server/
+COPY packages/sdk/package.json packages/sdk/
+COPY packages/test-utils/package.json packages/test-utils/
+COPY packages/vscode-ide-companion/package.json packages/vscode-ide-companion/
+RUN npm ci --omit=dev --ignore-scripts \
+ && npm cache clean --force
+
+# Copy compiled output + the bits the runtime actually needs.
+COPY --from=builder /build/packages/core/dist           packages/core/dist
+COPY --from=builder /build/packages/core/index.ts       packages/core/
+COPY --from=builder /build/packages/cli/dist            packages/cli/dist
+COPY --from=builder /build/packages/devtools/dist       packages/devtools/dist
+COPY --from=builder /build/packages/devtools/client     packages/devtools/client
+COPY --from=builder /build/packages/a2a-server/dist     packages/a2a-server/dist
+
+# Drop privileges to the bundled non-root `node` user. Matches
+# docker-compose's `user: "1000:1000"` mount.
+RUN chown -R node:node /app
+USER node
+
+EXPOSE 41242
+CMD ["node", "packages/a2a-server/dist/src/http/server.js"]
