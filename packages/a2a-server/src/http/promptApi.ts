@@ -1721,6 +1721,32 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
+/**
+ * Pull the first candidate's first text part out of a Google
+ * generateContent response. The response may be wrapped in an
+ * outer `response` field (cloudcode-pa shape) or come directly
+ * with `candidates` at the root (Generative Language API shape) —
+ * we handle both. Returns the first 60 chars of text, or '' if
+ * the response shape doesn't match. Never throws.
+ */
+function extractCandidateText(body: unknown): string {
+  if (!isRecord(body)) return '';
+  const root = isRecord(body['response']) ? body['response'] : body;
+  const candidates = root['candidates'];
+  if (!Array.isArray(candidates) || candidates.length === 0) return '';
+  const first: unknown = candidates[0];
+  if (!isRecord(first)) return '';
+  const content = first['content'];
+  if (!isRecord(content)) return '';
+  const parts = content['parts'];
+  if (!Array.isArray(parts) || parts.length === 0) return '';
+  const part: unknown = parts[0];
+  if (!isRecord(part)) return '';
+  const text = part['text'];
+  if (typeof text !== 'string') return '';
+  return text.slice(0, 60);
+}
+
 function parseQuotaResetMs(errorMsg: string): number | undefined {
   // Find the first `{` and try parsing from there — message often has
   // a prefix like "Error from CLI: {...json...}".
@@ -2923,27 +2949,30 @@ export function createPromptApiRouter(
     });
   });
 
-  // Health-check a single credential by calling Google's
-  // cloudcode-pa.googleapis.com/v1internal:loadCodeAssist
-  // endpoint *directly* — no CLI subprocess, no ACP, no retry
-  // loops. This was a deliberate move away from the previous
-  // CLI-based implementation:
+  // Health-check a single credential by issuing a *real* (but
+  // cheap) generateContent request directly against Google's
+  // cloudcode-pa.googleapis.com/v1internal endpoint — no CLI
+  // subprocess, no ACP, no retry loops.
   //
-  //   - The CLI swallows upstream 429s by either retrying
-  //     internally for 30+ s or resolving prompt() with an empty
-  //     reply and stopReason='end_turn'/'cancelled'. Either way
-  //     the operator never sees the actual quotaResetTimeStamp.
-  //   - Direct HTTPS gives us the raw Google response, including
-  //     RESOURCE_EXHAUSTED + ErrorInfo metadata, in <1 s.
-  //   - loadCodeAssist consumes negligible quota (it's a profile
-  //     introspection RPC, not a generation call).
+  // We probe with `gemini-2.5-flash` and `maxOutputTokens: 1`, the
+  // same approach gcli2api uses. This is more thorough than the
+  // earlier loadCodeAssist-based implementation:
   //
-  // The same OAuth client and refresh-token machinery the rest
-  // of the codebase uses is reused here, so we don't duplicate
-  // token-refresh logic.
-  const TEST_TIMEOUT_MS = 10_000;
+  //   - loadCodeAssist only checks account auth + tier; it
+  //     returns 200 even when a *specific model's* quota is
+  //     exhausted, giving false positives.
+  //   - generateContent exercises the actual chat path, so
+  //     per-(account × model × time-window) quota state surfaces
+  //     as a real 429 with quotaResetTimeStamp.
+  //   - Cost: ~1 token per test (negligible).
+  //
+  // setupUser is reused to fetch the credential's projectId
+  // (loadCodeAssist + onboardUser flow) — same code the quota
+  // endpoint already uses, so we don't duplicate that machinery.
+  const TEST_TIMEOUT_MS = 15_000;
   const CODE_ASSIST_BASE_URL = 'https://cloudcode-pa.googleapis.com';
-  const TEST_API_PATH = '/v1internal:loadCodeAssist';
+  const TEST_API_PATH = '/v1internal:generateContent';
+  const TEST_MODEL = 'gemini-2.5-flash';
   router.post('/v1/credentials/:credentialId/test', async (req, res) => {
     const credentialId = req.params['credentialId'];
     if (typeof credentialId !== 'string' || !credentialId) {
@@ -3007,21 +3036,68 @@ export function createPromptApiRouter(
       const client = createPromptCredentialOAuthClient(state.settings.proxyUrl);
       client.setCredentials(credentials);
 
-      // getAccessToken() refreshes via refresh_token if the access
-      // token is expired or missing. Throws on permanent failures
-      // (e.g. revoked refresh_token).
-      const tokenResult = await client.getAccessToken();
-      const accessToken = tokenResult.token;
-      if (!accessToken) {
-        throw new Error('OAuth access token unavailable after refresh');
+      // First fetch the credential's projectId. setupUser does the
+      // loadCodeAssist + onboardUser dance internally — this is
+      // both how the existing /v1/quotas route gets projectId AND
+      // a basic auth check (will throw on revoked refresh_token,
+      // 4xx auth errors, etc.). We funnel its errors through the
+      // same applyCredentialCooldown path so a permanently-broken
+      // credential surfaces as a "re-login needed" badge.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      const configShim = {
+        getValidationHandler: () => undefined,
+      } as unknown as Config;
+      let projectId: string;
+      try {
+        const userData = await setupUser(client, configShim);
+        projectId = userData.projectId;
+      } catch (setupErr: unknown) {
+        const setupMsg = extractErrorMessage(setupErr);
+        const durationMs = Date.now() - startTime;
+        // Auth-style failures during setupUser (invalid_grant,
+        // permission denied, etc.) → credential-wide cooldown.
+        if (
+          /invalid_grant|refresh_token_expired|invalid_refresh_token|permission_denied|unauthorized/i.test(
+            setupMsg,
+          )
+        ) {
+          applyCredentialCooldown(
+            state,
+            credentialId,
+            requestModel,
+            new Error(`HTTP 401: ${setupMsg}`),
+          );
+          return res.status(200).json({
+            ok: false,
+            credentialId,
+            durationMs,
+            error: `Auth setup failed: ${setupMsg}. Re-login required.`,
+            cooldowns: extractCooldownsForCredential(state, credentialId),
+          });
+        }
+        // Network / transient — bubble up without cooldown.
+        return res.status(200).json({
+          ok: false,
+          credentialId,
+          durationMs,
+          error: `setupUser failed: ${setupMsg}`,
+        });
+      }
+      if (!projectId) {
+        return res.status(200).json({
+          ok: false,
+          credentialId,
+          durationMs: Date.now() - startTime,
+          error:
+            'Could not resolve projectId for this credential — onboarding may be incomplete. Try re-adding the credential.',
+        });
       }
 
-      // Direct call to cloudcode-pa.googleapis.com. We use
-      // OAuth2Client.request — same gaxios transporter the rest of
-      // the codebase uses, so proxy and timeouts are honored.
-      // Setting `validateStatus` to always-true so a non-2xx is
-      // returned as a structured response instead of throwing,
-      // which lets us inspect the body for quotaResetTimeStamp.
+      // Real probe: send a minimal "hi" prompt with maxOutputTokens=1
+      // against gemini-2.5-flash. This is the same fixture gcli2api
+      // uses — cheap (~1 token) but exercises the *real* chat path
+      // so per-model quota exhaustion (which loadCodeAssist can't
+      // see) shows up as a clean 429.
       let httpStatus = 0;
       let httpBody: unknown = null;
       try {
@@ -3029,7 +3105,14 @@ export function createPromptApiRouter(
           method: 'POST',
           url: `${CODE_ASSIST_BASE_URL}${TEST_API_PATH}`,
           headers: { 'Content-Type': 'application/json' },
-          data: { metadata: { ideType: 'IDE_UNSPECIFIED' } },
+          data: {
+            model: TEST_MODEL,
+            project: projectId,
+            request: {
+              contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+              generationConfig: { maxOutputTokens: 1 },
+            },
+          },
           timeout: TEST_TIMEOUT_MS,
           // Don't auto-throw on 4xx/5xx — we need the body to
           // extract Google's RESOURCE_EXHAUSTED metadata.
@@ -3060,28 +3143,26 @@ export function createPromptApiRouter(
       const bodyText = typeof httpBody === 'string' ? httpBody : JSON.stringify(httpBody ?? {});
 
       // ── 200: healthy ─────────────────────────────────────────────
+      // generateContent returned, model produced ≥ 0 tokens (we
+      // capped at 1). The credential can actually call this model
+      // *right now* — the strongest "healthy" signal possible
+      // short of running a real conversation.
       if (httpStatus === 200) {
-        // Try to surface tier / credit info so the operator gets a
-        // richer "ok" message. Stringify-fallback if the body shape
-        // doesn't match what we expect — the test still passes.
-        let tier = '';
-        if (isRecord(httpBody)) {
-          const paid = httpBody['paidTier'];
-          const current = httpBody['currentTier'];
-          if (isRecord(paid)) {
-            const paidId = paid['id'];
-            if (typeof paidId === 'string') tier = paidId;
-          }
-          if (!tier && isRecord(current)) {
-            const currentId = current['id'];
-            if (typeof currentId === 'string') tier = currentId;
-          }
-        }
+        // Pull out the candidate text if any so the operator sees
+        // what the model actually said. Falls back to "OK" if the
+        // response shape is unexpected. The shape is well-known
+        // (Google's documented generateContent response), but we
+        // walk it via isRecord guards to keep ts-eslint's
+        // no-unsafe-assignment happy and to be defensive against
+        // backend shape drift.
+        const snippet = extractCandidateText(httpBody);
         return res.status(200).json({
           ok: true,
           credentialId,
           durationMs,
-          reply: tier ? `OK — tier=${tier}` : 'OK',
+          reply: snippet
+            ? `OK (${TEST_MODEL}) — "${snippet}"`
+            : `OK (${TEST_MODEL})`,
         });
       }
 
