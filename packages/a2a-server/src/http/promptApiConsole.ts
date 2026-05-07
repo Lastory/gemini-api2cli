@@ -1829,14 +1829,22 @@ function renderAcpPrompt(p, nowMs) {
   if (typeof p.totalTokens === 'number') tokenChips.push('<span>tot ' + p.totalTokens + '</span>');
   if (typeof p.cachedTokens === 'number' && p.cachedTokens > 0) tokenChips.push('<span>cached ' + p.cachedTokens + '</span>');
 
+  // NOTE: do NOT put a literal newline-escape inside these strings.
+  // This whole function lives inside an outer template literal in the
+  // file body, and inside a template literal a backslash-n decays to
+  // an actual newline character. That would split the JS single-quoted
+  // string across two lines in the served HTML and crash with
+  // "Uncaught SyntaxError: Invalid or unexpected token". Use a "br"
+  // tag (or no separator) instead — the host element is rendered via
+  // innerHTML so HTML markup is the right tool anyway.
   const promptText = p.promptSummary
     ? '<span class="acp-prompt-text">' + escapeHtml(p.promptSummary) +
-      (truncatedIn ? '\n<small>… +' + (p.promptCharCount - p.promptSummary.length) + ' ' + t('acpPromptCharsTruncated') + '</small>' : '') +
+      (truncatedIn ? '<br><small>… +' + (p.promptCharCount - p.promptSummary.length) + ' ' + t('acpPromptCharsTruncated') + '</small>' : '') +
       '</span>'
     : '<span class="acp-prompt-text empty">∅</span>';
   const responseText = p.responseSummary
     ? '<span class="acp-prompt-text">' + escapeHtml(p.responseSummary) +
-      (truncatedOut ? '\n<small>… +' + (p.responseCharCount - p.responseSummary.length) + ' ' + t('acpPromptCharsTruncated') + '</small>' : '') +
+      (truncatedOut ? '<br><small>… +' + (p.responseCharCount - p.responseSummary.length) + ' ' + t('acpPromptCharsTruncated') + '</small>' : '') +
       '</span>'
     : (p.status === 'in_progress'
         ? '<span class="acp-prompt-text empty">…</span>'
@@ -1916,11 +1924,17 @@ async function refreshAcpWorkerDetailDom(credentialId) {
 }
 
 // Lightweight CSS.escape polyfill — older browsers may not have it.
+// Note the four-backslash quartet below: this whole script lives inside
+// an outer template literal in the file body, where backslash-escapes
+// are halved on expansion. Writing two backslashes here would surface
+// as one backslash in the served HTML, where it would then escape the
+// closing quote and break the script. Four backslashes round-trip to
+// the two backslashes the browser needs to see.
 function cssEscape(s) {
   if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
     return CSS.escape(s);
   }
-  return String(s).replace(/[^a-zA-Z0-9_-]/g, ch => '\\' + ch);
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, ch => '\\\\' + ch);
 }
 
 function updateAcpStatusText() {
