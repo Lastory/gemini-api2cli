@@ -23,6 +23,7 @@ import {
   DEFAULT_GEMINI_FLASH_LITE_MODEL,
   DEFAULT_GEMINI_FLASH_MODEL,
   DEFAULT_GEMINI_MODEL,
+  SECONDARY_GEMINI_3_5_FLASH_MODEL,
   DEFAULT_GEMINI_MODEL_AUTO,
   GEMINI_MODEL_ALIAS_AUTO,
   GEMINI_MODEL_ALIAS_FLASH,
@@ -151,6 +152,13 @@ const PROMPT_API_MODEL_OPTIONS = [
     label: getDisplayString(PREVIEW_GEMINI_3_1_MODEL),
     kind: 'pro',
     isPreview: true,
+  },
+  {
+    // Temp : gemini-3.5-flash -> gemini-3-flash
+    id: SECONDARY_GEMINI_3_5_FLASH_MODEL,
+    label: getDisplayString(SECONDARY_GEMINI_3_5_FLASH_MODEL),
+    kind: 'flash',
+    isPreview: false,
   },
   {
     id: DEFAULT_GEMINI_FLASH_MODEL,
