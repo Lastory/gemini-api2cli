@@ -23,12 +23,12 @@ import {
   DEFAULT_GEMINI_FLASH_LITE_MODEL,
   DEFAULT_GEMINI_FLASH_MODEL,
   DEFAULT_GEMINI_MODEL,
+  DEFAULT_GEMINI_3_5_FLASH_MODEL,
   DEFAULT_GEMINI_MODEL_AUTO,
   GEMINI_MODEL_ALIAS_AUTO,
   GEMINI_MODEL_ALIAS_FLASH,
   GEMINI_MODEL_ALIAS_FLASH_LITE,
   GEMINI_MODEL_ALIAS_PRO,
-  PREVIEW_GEMINI_3_1_FLASH_LITE_MODEL,
   PREVIEW_GEMINI_3_1_MODEL,
   PREVIEW_GEMINI_FLASH_MODEL,
   PREVIEW_GEMINI_MODEL,
@@ -154,6 +154,12 @@ const PROMPT_API_MODEL_OPTIONS = [
     isPreview: true,
   },
   {
+    id: DEFAULT_GEMINI_3_5_FLASH_MODEL,
+    label: getDisplayString(DEFAULT_GEMINI_3_5_FLASH_MODEL),
+    kind: 'flash',
+    isPreview: false,
+  },
+  {
     id: DEFAULT_GEMINI_FLASH_MODEL,
     label: getDisplayString(DEFAULT_GEMINI_FLASH_MODEL),
     kind: 'flash',
@@ -170,12 +176,6 @@ const PROMPT_API_MODEL_OPTIONS = [
     label: getDisplayString(DEFAULT_GEMINI_FLASH_LITE_MODEL),
     kind: 'flash-lite',
     isPreview: false,
-  },
-  {
-    id: PREVIEW_GEMINI_3_1_FLASH_LITE_MODEL,
-    label: getDisplayString(PREVIEW_GEMINI_3_1_FLASH_LITE_MODEL),
-    kind: 'flash-lite',
-    isPreview: true,
   },
 ] as const;
 const PROMPT_API_MODEL_ALIASES = [
