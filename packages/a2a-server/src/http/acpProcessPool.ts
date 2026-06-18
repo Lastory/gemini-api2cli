@@ -188,6 +188,23 @@ function buildAcpChildEnv(
 }
 
 /**
+ * Extract a readable error message from any error type.
+ */
+function extractErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === 'string') {
+    return err;
+  }
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
+/**
  * A single long-lived CLI process running in ACP mode.
  * Can switch credentials at runtime via re-authentication.
  */
@@ -345,8 +362,7 @@ export class AcpWorker {
       // hit a half-line at the start.
       this.stderrTail += text;
       if (this.stderrTail.length > AcpWorker.MAX_STDERR_TAIL) {
-        const overflow =
-          this.stderrTail.length - AcpWorker.MAX_STDERR_TAIL;
+        const overflow = this.stderrTail.length - AcpWorker.MAX_STDERR_TAIL;
         const sliceFrom = this.stderrTail.indexOf('\n', overflow);
         this.stderrTail = this.stderrTail.slice(
           sliceFrom > 0 ? sliceFrom + 1 : overflow,
@@ -734,8 +750,28 @@ export class AcpWorker {
 
   /**
    * Destroy a specific session.
+   * Sends a request to the remote ACP worker to clean up the session,
+   * then removes local references.
    */
   destroySession(sessionId: string): void {
+    // First, notify the remote worker to close the session
+    if (this.connection && this._state === 'ready') {
+      try {
+        this.connection
+          .unstable_closeSession({ sessionId })
+          .catch((err: unknown) => {
+            logger.debug(
+              `[ACP] Failed to close session ${sessionId} on remote: ${extractErrorMessage(err)}`,
+            );
+          });
+      } catch (err) {
+        logger.debug(
+          `[ACP] Failed to close session ${sessionId} on remote: ${extractErrorMessage(err)}`,
+        );
+      }
+    }
+
+    // Then clean up local references
     this.sessions.delete(sessionId);
     this.promptListeners.delete(sessionId);
     if (this.sessions.size === 0) {

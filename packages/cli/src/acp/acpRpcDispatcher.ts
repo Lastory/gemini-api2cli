@@ -233,4 +233,16 @@ export class GeminiAgent {
     }
     return session.setModel(params.modelId);
   }
+
+  /**
+   * Close a session (internal method called by a2a-server).
+   * Disposes the session and removes it from the manager.
+   */
+  async unstable_closeSession(
+    params: acp.CloseSessionRequest,
+  ): Promise<acp.CloseSessionResponse> {
+    const { sessionId } = params;
+    this.sessionManager.deleteSession(sessionId);
+    return {};
+  }
 }

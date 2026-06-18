@@ -55,6 +55,14 @@ export class AcpSessionManager {
     this.sessions.clear();
   }
 
+  deleteSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.dispose();
+      this.sessions.delete(sessionId);
+    }
+  }
+
   async newSession(
     { cwd, mcpServers }: acp.NewSessionRequest,
     authDetails: AuthDetails,
