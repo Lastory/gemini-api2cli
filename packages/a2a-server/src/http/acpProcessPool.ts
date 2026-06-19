@@ -210,6 +210,7 @@ function extractErrorMessage(err: unknown): string {
  */
 export class AcpWorker {
   credentialId: string;
+  readonly createdAt: number = Date.now();
   private child: ChildProcessWithoutNullStreams | undefined;
   private connection: acp.ClientSideConnection | undefined;
   private _state: AcpWorkerState = 'starting';
@@ -1081,6 +1082,28 @@ export class AcpProcessPool {
   getReadyWorker(credentialId: string): AcpWorker | undefined {
     const worker = this.workers.get(credentialId);
     return worker && worker.state === 'ready' ? worker : undefined;
+  }
+
+  /**
+   * Finds an available idle worker (ready and no active sessions).
+   * Prioritizes the most recently created worker (LIFO) so that older workers
+   * can naturally time out during low-traffic periods, facilitating a macro
+   * round-robin rotation of credentials across traffic spikes.
+   */
+  getAnyIdleWorker(): AcpWorker | undefined {
+    let idleWorker: AcpWorker | undefined;
+    let maxCreatedAt = -1;
+    for (const w of this.workers.values()) {
+      if (
+        w.state === 'ready' &&
+        w.sessionCount === 0 &&
+        w.createdAt > maxCreatedAt
+      ) {
+        maxCreatedAt = w.createdAt;
+        idleWorker = w;
+      }
+    }
+    return idleWorker;
   }
 
   /**

@@ -1522,6 +1522,22 @@ async function getEffectiveCredentialIdAndHome(
 
   // Rotation mode: cycle through all credentials, skipping cooled-down ones
   if (state.settings.rotationEnabled) {
+    // Semi-strict round-robin: prefer existing healthy idle workers to avoid cold starts
+    // or constant credential switching when the pool has enough capacity.
+    const idleWorker = state.acpPool.getAnyIdleWorker();
+    if (
+      idleWorker &&
+      !hasCredentialWideCooldown(state, idleWorker.credentialId)
+    ) {
+      logger.info(
+        `[Prompt API] Rotation: Semi-strict reuse of idle worker for credential "${idleWorker.credentialId}"`,
+      );
+      const homeDir = state.credentialStore.getCredentialHomeDir(
+        idleWorker.credentialId,
+      );
+      return { credentialId: idleWorker.credentialId, homeDir };
+    }
+
     const credentials = await state.credentialStore.listCredentials();
     if (credentials.length > 0) {
       // Try up to credentials.length times to find a healthy one
