@@ -821,6 +821,10 @@ export class AcpWorker {
     this.clearIdleTimer();
     if (this.idleTimeoutMs > 0 && this._state === 'ready') {
       this.idleTimer = setTimeout(() => {
+        if (this.promptListeners.size > 0) {
+          this.touchActivity();
+          return;
+        }
         logger.info(
           `[ACP] Worker idle timeout for credential ${this.credentialId}, shutting down`,
         );
