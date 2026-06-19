@@ -484,15 +484,57 @@ function createPromptApiState(
       // only recycled on credential failover or explicit kill. Operators can
       // set a positive value (seconds, via the admin console) to trim idle
       // processes on memory-constrained hosts.
-      acpIdleTimeoutMs: 0,
-      maxWorkers: 2,
-      failoverWorkers: 1,
+      acpIdleTimeoutMs:
+        process.env['GEMINI_PROMPT_API_ACP_IDLE_TIMEOUT_SEC'] !== undefined &&
+        !Number.isNaN(
+          Number(process.env['GEMINI_PROMPT_API_ACP_IDLE_TIMEOUT_SEC']),
+        )
+          ? Math.max(
+              0,
+              Math.floor(
+                Number(process.env['GEMINI_PROMPT_API_ACP_IDLE_TIMEOUT_SEC']) *
+                  1000,
+              ),
+            )
+          : 0,
+      maxWorkers:
+        process.env['GEMINI_PROMPT_API_MAX_WORKERS'] !== undefined &&
+        !Number.isNaN(Number(process.env['GEMINI_PROMPT_API_MAX_WORKERS']))
+          ? Math.max(
+              0,
+              Math.floor(Number(process.env['GEMINI_PROMPT_API_MAX_WORKERS'])),
+            )
+          : 2,
+      failoverWorkers:
+        process.env['GEMINI_PROMPT_API_FAILOVER_WORKERS'] !== undefined &&
+        !Number.isNaN(Number(process.env['GEMINI_PROMPT_API_FAILOVER_WORKERS']))
+          ? Math.max(
+              0,
+              Math.floor(
+                Number(process.env['GEMINI_PROMPT_API_FAILOVER_WORKERS']),
+              ),
+            )
+          : 1,
       // Default: 9 minutes. Comfortably under the typical 10-15 min
       // HTTP/2 idle close used by Google's frontends and the 1-hour
       // OAuth access_token TTL — so the first user request after a
       // long lull doesn't pay a TLS+token-refresh round trip.
       // Operators can set 0 to disable.
-      acpKeepaliveIntervalMs: 9 * 60_000,
+      acpKeepaliveIntervalMs:
+        process.env['GEMINI_PROMPT_API_ACP_KEEPALIVE_INTERVAL_SEC'] !==
+          undefined &&
+        !Number.isNaN(
+          Number(process.env['GEMINI_PROMPT_API_ACP_KEEPALIVE_INTERVAL_SEC']),
+        )
+          ? Math.max(
+              0,
+              Math.floor(
+                Number(
+                  process.env['GEMINI_PROMPT_API_ACP_KEEPALIVE_INTERVAL_SEC'],
+                ) * 1000,
+              ),
+            )
+          : 9 * 60_000,
     },
     acpPool,
     rotationIndex: 0,
