@@ -163,6 +163,10 @@ function buildAcpChildEnv(
 ): NodeJS.ProcessEnv {
   const env = { ...process.env };
 
+  // ACP workers are managed by the pool, they should not use the CLI's internal daemon wrapper.
+  // This allows them to correctly receive and handle SIGTERM when `AcpWorker.shutdown()` is called.
+  env['GEMINI_CLI_NO_RELAUNCH'] = 'true';
+
   env['GEMINI_CLI_HOME'] = isolatedHomeDir;
   env['GOOGLE_GENAI_USE_GCA'] = 'true';
   env['HOME'] = isolatedHomeDir;
