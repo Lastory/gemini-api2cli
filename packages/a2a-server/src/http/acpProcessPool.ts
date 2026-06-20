@@ -354,10 +354,8 @@ export class AcpWorker {
     // the credential-test post-mortem can scrape for "429" /
     // "RESOURCE_EXHAUSTED" markers when the CLI swallows the real
     // error and resolves prompt() with an empty reply.
-    let stderrBuf = '';
     this.child.stderr.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
-      stderrBuf += text;
       // Append to per-worker tail and truncate to the cap. We trim
       // at line boundaries when possible so log scraping doesn't
       // hit a half-line at the start.
@@ -378,8 +376,8 @@ export class AcpWorker {
         logger.error(
           `[ACP] Worker for credential ${this.credentialId} exited with code ${String(code)}`,
         );
-        if (stderrBuf.trim()) {
-          logger.error(`[ACP] stderr: ${stderrBuf.trim()}`);
+        if (this.stderrTail.trim()) {
+          logger.error(`[ACP] stderr: ${this.stderrTail.trim()}`);
         }
         this._state = 'dead';
         // Reject any pending prompts
