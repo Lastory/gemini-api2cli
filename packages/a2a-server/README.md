@@ -19,7 +19,7 @@ API 路由。
 - `/v1/credentials*`
 - `/v1/quotas*`
 - `/v1/gemini/*`
-- `/v1/openai/*`
+- `/v1/*`
 
 ## 目录结构
 
@@ -100,7 +100,7 @@ API 路由。
 
 ### OpenAI 兼容接口
 
-- `POST /v1/openai/chat/completions`
+- `POST /v1/chat/completions`
 
 ## 鉴权说明
 

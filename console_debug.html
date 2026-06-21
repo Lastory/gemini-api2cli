@@ -1011,7 +1011,7 @@ function renderEndpoints() {
   const eps = [
     ['POST','/v1/gemini/generateContent',t('epGeminiGen')],
     ['POST','/v1/gemini/streamGenerateContent',t('epGeminiStream')],
-    ['POST','/v1/openai/chat/completions',t('epOpenai')],
+    ['POST','/v1/chat/completions',t('epOpenai')],
     ['GET','/v1/models',t('epModels')],
     ['GET','/v1/models/current',t('epModelsCur')],
     ['PUT','/v1/models/current',t('epModelsSet')],
@@ -1170,7 +1170,7 @@ async function testCredential(credentialId) {
   try {
     const prevCred = S.lastCreds?.currentCredentialId;
     await api('/v1/credentials/current',{method:'PUT',body:JSON.stringify({credentialId})});
-    const result = await api('/v1/openai/chat/completions',{
+    const result = await api('/v1/chat/completions',{
       method:'POST',
       body:JSON.stringify({messages:[{role:'user',content:'Hello, reply with exactly: OK'}]}),
     });

@@ -772,7 +772,7 @@ describe('Prompt API routes', () => {
     expect(consoleResponse.status).toBe(200);
     expect(consoleResponse.headers['content-type']).toContain('text/html');
     expect(consoleResponse.text).toContain('Gemini');
-    expect(consoleResponse.text).toContain('/v1/openai/chat/completions');
+    expect(consoleResponse.text).toContain('/v1/chat/completions');
 
     const deleteOneResponse = await request(app).delete(
       PROMPT_API_CREDENTIAL_ROUTE.replace(':credentialId', credential.id),
