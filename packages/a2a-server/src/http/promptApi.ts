@@ -65,7 +65,8 @@ import {
 export const PROMPT_API_GEMINI_GENERATE_ROUTE = '/v1/gemini/generateContent';
 export const PROMPT_API_GEMINI_STREAM_ROUTE =
   '/v1/gemini/streamGenerateContent';
-export const PROMPT_API_OPENAI_COMPLETIONS_ROUTE = '/v1/chat/completions';
+export const PROMPT_API_OPENAI_COMPLETIONS_ROUTE =
+  '/v1/openai/chat/completions';
 export const PROMPT_API_HEALTH_ROUTE = '/v1/health';
 export const PROMPT_API_MODELS_ROUTE = '/v1/models';
 export const PROMPT_API_CURRENT_MODEL_ROUTE = '/v1/models/current';
