@@ -1890,7 +1890,18 @@ export class Config implements McpContext, AgentLoopContext {
     return this.loadMemoryFromIncludeDirectories;
   }
 
+  getPromptInjectionLevel(): 'full' | 'reduced' | 'minimal' {
+    const level = process.env['GEMINI_PROMPT_INJECTION_LEVEL'];
+    if (level === 'reduced' || level === 'minimal') {
+      return level;
+    }
+    return 'full';
+  }
+
   getIncludeDirectoryTree(): boolean {
+    if (this.getPromptInjectionLevel() !== 'full') {
+      return false;
+    }
     return this.includeDirectoryTree;
   }
 

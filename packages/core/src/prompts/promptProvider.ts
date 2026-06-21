@@ -70,6 +70,10 @@ export class PromptProvider {
 
     const approvedPlanPath = context.config.getApprovedPlanPath();
 
+    const injectionLevel = context.config.getPromptInjectionLevel();
+    const isFull = injectionLevel === 'full';
+    const isNotMinimal = injectionLevel !== 'minimal';
+
     const desiredModel = resolveModel(
       context.config.getActiveModel(),
       context.config.getGemini31LaunchedSync?.() ?? false,
@@ -140,17 +144,25 @@ export class PromptProvider {
           !!userMemory.project?.trim());
 
       const options: snippets.SystemPromptOptions = {
-        preamble: this.withSection('preamble', () => ({
-          interactive: interactiveMode,
-          approvalMode,
-        })),
-        coreMandates: this.withSection('coreMandates', () => ({
-          interactive: interactiveMode,
-          hasSkills: skills.length > 0,
-          hasHierarchicalMemory,
-          contextFilenames,
-          topicUpdateNarration: isTopicUpdateNarrationEnabled,
-        })),
+        preamble: this.withSection(
+          'preamble',
+          () => ({
+            interactive: interactiveMode,
+            approvalMode,
+          }),
+          isNotMinimal,
+        ),
+        coreMandates: this.withSection(
+          'coreMandates',
+          () => ({
+            interactive: interactiveMode,
+            hasSkills: skills.length > 0,
+            hasHierarchicalMemory,
+            contextFilenames,
+            topicUpdateNarration: isTopicUpdateNarrationEnabled,
+          }),
+          isFull,
+        ),
         subAgents: this.withSection(
           'agentContexts',
           () =>
@@ -161,7 +173,7 @@ export class PromptProvider {
                 name: d.name,
                 description: d.description,
               })),
-          enabledToolNames.has(AGENT_TOOL_NAME),
+          enabledToolNames.has(AGENT_TOOL_NAME) && isNotMinimal,
         ),
         agentSkills: this.withSection(
           'agentSkills',
@@ -171,9 +183,9 @@ export class PromptProvider {
               description: s.description,
               location: s.location,
             })),
-          skills.length > 0,
+          skills.length > 0 && isNotMinimal,
         ),
-        taskTracker: trackerDir,
+        taskTracker: isNotMinimal ? trackerDir : undefined,
         hookContext: isSectionEnabled('hookContext') || undefined,
         primaryWorkflows: this.withSection(
           'primaryWorkflows',
@@ -197,7 +209,7 @@ export class PromptProvider {
               topicUpdateNarration: isTopicUpdateNarrationEnabled,
             };
           },
-          !isPlanMode,
+          !isPlanMode && isFull,
         ),
         planningWorkflow: this.withSection(
           'planningWorkflow',
@@ -218,7 +230,7 @@ export class PromptProvider {
                 : undefined;
             })(),
           }),
-          isPlanMode,
+          isPlanMode && isFull,
         ),
         operationalGuidelines: this.withSection(
           'operationalGuidelines',
@@ -233,20 +245,25 @@ export class PromptProvider {
             ),
             globalMemoryPath: normalizePromptPath(getGlobalMemoryFilePath()),
           }),
+          isFull,
         ),
-        sandbox: this.withSection('sandbox', () => ({
-          mode: getSandboxMode(),
-          toolSandboxingEnabled: context.config.getSandboxEnabled(),
-        })),
+        sandbox: this.withSection(
+          'sandbox',
+          () => ({
+            mode: getSandboxMode(),
+            toolSandboxingEnabled: context.config.getSandboxEnabled(),
+          }),
+          isNotMinimal,
+        ),
         interactiveYoloMode: this.withSection(
           'interactiveYoloMode',
           () => true,
-          isYoloMode && interactiveMode,
+          isYoloMode && interactiveMode && isNotMinimal,
         ),
         gitRepo: this.withSection(
           'git',
           () => ({ interactive: interactiveMode }),
-          isGitRepository(process.cwd()) ? true : false,
+          isGitRepository(process.cwd()) && isFull ? true : false,
         ),
         finalReminder: isModernModel
           ? undefined
@@ -265,8 +282,8 @@ export class PromptProvider {
     // --- Finalization (Shell) ---
     const finalPrompt = activeSnippets.renderFinalShell(
       basePrompt,
-      userMemory,
-      contextFilenames,
+      isNotMinimal ? userMemory : undefined,
+      isNotMinimal ? contextFilenames : undefined,
     );
 
     // Sanitize erratic newlines from composition

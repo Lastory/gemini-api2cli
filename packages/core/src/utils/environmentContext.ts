@@ -85,6 +85,10 @@ export async function getInitialChatHistory(
   config: Config,
   extraHistory?: ReadonlyArray<Content | HistoryTurn>,
 ): Promise<Array<Content | HistoryTurn>> {
+  if (config.getPromptInjectionLevel() === 'minimal') {
+    return [...(extraHistory ?? [])];
+  }
+
   const envId = deriveStableId(['environment-context']);
 
   if (extraHistory && extraHistory.length > 0) {

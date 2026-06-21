@@ -1390,8 +1390,10 @@ export class LocalAgentExecutor<TOutput extends z.ZodTypeAny> {
     }
 
     // Append environment context (CWD and folder structure).
-    const dirContext = await getDirectoryContextString(this.context.config);
-    finalPrompt += `\n\n# Environment Context\n${dirContext}`;
+    if (this.context.config.getIncludeDirectoryTree()) {
+      const dirContext = await getDirectoryContextString(this.context.config);
+      finalPrompt += `\n\n# Environment Context\n${dirContext}`;
+    }
 
     const approvalMode = this.context.config.getApprovalMode();
     if (approvalMode === ApprovalMode.PLAN) {
