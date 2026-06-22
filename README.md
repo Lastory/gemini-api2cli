@@ -31,14 +31,12 @@ CLI 作为底层执行引擎，在此之上增加了浏览器管理台、Token �
 ### 本地启动
 
 ```bash
-git clone https://github.com/afu6609/gemini-api2cli
+git clone https://github.com/Lastory/gemini-api2cli
 cd gemini-api2cli
 npm install
-npm run start:a2a-server
+npm run build -w @google/gemini-cli-core -w @google/gemini-cli -w @google/gemini-cli-a2a-server
+npm run start:a2a-server-dotenv
 ```
-
-`start:a2a-server` 会自动依次构建 `core` → `a2a-server`
-两个 workspace，然后启动服务。
 
 启动后访问管理台：
 
@@ -48,7 +46,7 @@ http://localhost:41242/manage
 
 首次访问需要输入 Token，默认值为 `root`（可通过环境变量修改）。
 
-### 环境变量
+### 部分环境变量
 
 | 变量名                    | 说明                                     | 默认值    |
 | ------------------------- | ---------------------------------------- | --------- |
@@ -63,12 +61,10 @@ http://localhost:41242/manage
 #### 1. 克隆并本地构建
 
 ```bash
-git clone https://github.com/afu6609/gemini-api2cli
+git clone https://github.com/Lastory/gemini-api2cli
 cd gemini-api2cli
 npm install
-npm run build --workspace @google/gemini-cli-core
-npm run build --workspace @google/gemini-cli
-npm run build --workspace @google/gemini-cli-a2a-server
+npm run build -w @google/gemini-cli-core -w @google/gemini-cli -w @google/gemini-cli-a2a-server
 ```
 
 > TypeScript 编译需要较多内存，在本地完成后再打包 Docker 镜像。

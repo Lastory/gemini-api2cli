@@ -39,14 +39,12 @@ package names still refer to `gemini-cli` or `a2a-server`.
 ### Local Setup
 
 ```bash
-git clone https://github.com/afu6609/gemini-api2cli
+git clone https://github.com/Lastory/gemini-api2cli
 cd gemini-api2cli
 npm install
-npm run start:server
+npm run build -w @google/gemini-cli-core -w @google/gemini-cli -w @google/gemini-cli-a2a-server
+npm run start:a2a-server-dotenv
 ```
-
-`start:server` automatically builds `core` → `a2a-server` workspaces in
-sequence, then starts the service.
 
 Then open the management console:
 
@@ -72,12 +70,10 @@ On first visit you will need to enter a token. The default is `root`
 #### 1. Clone and build locally
 
 ```bash
-git clone https://github.com/afu6609/gemini-api2cli
+git clone https://github.com/Lastory/gemini-api2cli
 cd gemini-api2cli
 npm install
-npm run build --workspace @google/gemini-cli-core
-npm run build --workspace @google/gemini-cli
-npm run build --workspace @google/gemini-cli-a2a-server
+npm run build -w @google/gemini-cli-core -w @google/gemini-cli -w @google/gemini-cli-a2a-server
 ```
 
 > TypeScript compilation is memory-intensive. Build locally first, then package
