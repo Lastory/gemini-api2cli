@@ -31,7 +31,12 @@ import {
   getContextIdFromMetadata,
   getAgentSettingsFromMetadata,
 } from '../types.js';
-import { loadConfig, loadEnvironment, setTargetDir } from '../config/config.js';
+import {
+  loadConfig,
+  loadEnvironment,
+  setIsTrusted,
+  setTargetDir,
+} from '../config/config.js';
 import { loadSettings } from '../config/settings.js';
 import { loadExtensions } from '../config/extension.js';
 import { Task } from './task.js';
@@ -105,7 +110,6 @@ export class CoderAgentExecutor implements AgentExecutor {
     taskId: string,
   ): Promise<Config> {
     const workspaceRoot = setTargetDir(agentSettings);
-    const isTrusted = agentSettings.isTrusted ?? false;
 
     // Reuse cached config if workspace hasn't changed
     if (this.cachedConfig && this.cachedConfigWorkspace === workspaceRoot) {
@@ -116,6 +120,7 @@ export class CoderAgentExecutor implements AgentExecutor {
     }
 
     loadEnvironment(); // Will override any global env with workspace envs
+    const isTrusted = setIsTrusted(agentSettings);
     const settings = loadSettings(workspaceRoot, isTrusted);
     const extensions = loadExtensions(workspaceRoot);
     const config = await loadConfig(
@@ -594,42 +599,49 @@ export class CoderAgentExecutor implements AgentExecutor {
 
         if (abortSignal.aborted) throw new Error('Execution aborted');
 
-        const completedTools = currentTask.getAndClearCompletedTools();
-
-        if (completedTools.length > 0) {
-          // If all completed tool calls were canceled, manually add them to history and set state to input-required, final:true
-          if (completedTools.every((tool) => tool.status === 'cancelled')) {
-            logger.info(
-              `[CoderAgentExecutor] Task ${taskId}: All tool calls were cancelled. Updating history and ending agent turn.`,
-            );
-            currentTask.addToolResponsesToHistory(completedTools);
-            agentTurnActive = false;
-            const stateChange: StateChange = {
-              kind: CoderAgentEvent.StateChangeEvent,
-            };
-            currentTask.setTaskStateAndPublishUpdate(
-              'input-required',
-              stateChange,
-              undefined,
-              undefined,
-              true,
-            );
-          } else {
-            logger.info(
-              `[CoderAgentExecutor] Task ${taskId}: Found ${completedTools.length} completed tool calls. Sending results back to LLM.`,
-            );
-
-            agentEvents = currentTask.sendCompletedToolsToLlm(
-              completedTools,
-              abortSignal,
-            );
-            // Continue the loop to process the LLM response to the tool results.
-          }
-        } else {
+        if (currentTask.hasPendingTools) {
           logger.info(
-            `[CoderAgentExecutor] Task ${taskId}: No more tool calls to process. Ending agent turn.`,
+            `[CoderAgentExecutor] Task ${taskId}: There are still ${currentTask.pendingToolsCount} pending tools waiting for approval. Yielding to user.`,
           );
           agentTurnActive = false;
+        } else {
+          const completedTools = currentTask.getAndClearCompletedTools();
+
+          if (completedTools.length > 0) {
+            // If all completed tool calls were canceled, manually add them to history and set state to input-required, final:true
+            if (completedTools.every((tool) => tool.status === 'cancelled')) {
+              logger.info(
+                `[CoderAgentExecutor] Task ${taskId}: All tool calls were cancelled. Updating history and ending agent turn.`,
+              );
+              currentTask.addToolResponsesToHistory(completedTools);
+              agentTurnActive = false;
+              const stateChange: StateChange = {
+                kind: CoderAgentEvent.StateChangeEvent,
+              };
+              currentTask.setTaskStateAndPublishUpdate(
+                'input-required',
+                stateChange,
+                undefined,
+                undefined,
+                true,
+              );
+            } else {
+              logger.info(
+                `[CoderAgentExecutor] Task ${taskId}: Found ${completedTools.length} completed tool calls. Sending results back to LLM.`,
+              );
+
+              agentEvents = currentTask.sendCompletedToolsToLlm(
+                completedTools,
+                abortSignal,
+              );
+              // Continue the loop to process the LLM response to the tool results.
+            }
+          } else {
+            logger.info(
+              `[CoderAgentExecutor] Task ${taskId}: No more tool calls to process. Ending agent turn.`,
+            );
+            agentTurnActive = false;
+          }
         }
       }
 

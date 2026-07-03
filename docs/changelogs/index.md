@@ -18,6 +18,24 @@ on GitHub.
 | [Preview](preview.md) | Experimental features ready for early feedback. |
 | [Stable](latest.md)   | Stable, recommended for general use.            |
 
+## Announcements: v0.45.0 - 2026-06-03
+
+- **Context Simplification:** Completed major architectural work to simplify the
+  `ContextManager`, improving system robustness and performance
+  ([#27345](https://github.com/google-gemini/gemini-cli/pull/27345) by
+  @joshualitt).
+- **A2A Usage Metadata:** Exposed critical usage metadata in the Agent-to-Agent
+  (A2A) protocol for better resource tracking
+  ([#27288](https://github.com/google-gemini/gemini-cli/pull/27288) by
+  @jvargassanchez-dot).
+- **Reliability Fixes:** Addressed Termux relaunch loops, PTY resize errors, and
+  forced sequential execution for topic updates
+  ([#27110](https://github.com/google-gemini/gemini-cli/pull/27110) by @saymanq,
+  [#27357](https://github.com/google-gemini/gemini-cli/pull/27357) by
+  @jvargassanchez-dot,
+  [#27461](https://github.com/google-gemini/gemini-cli/pull/27461) by
+  @scidomino).
+
 ## Announcements: v0.44.0 - 2026-05-27
 
 - **Unified Auto Mode:** Streamlined the automation experience by merging
@@ -489,6 +507,7 @@ on GitHub.
   headlessly in notebook cells or interactively in the built-in terminal
   ([pic](https://imgur.com/a/G0Tn7vi))
 - 🎉**Gemini CLI Extensions:**
+
   - **Conductor:** Planning++, Gemini works with you to build out a detailed
     plan, pull in extra details as needed, ultimately to give the LLM guardrails
     with artifacts. Measure twice, implement once!
@@ -617,6 +636,7 @@ on GitHub.
   - **Announcement:**
     [https://developers.googleblog.com/en/making-the-terminal-beautiful-one-pixel-at-a-time/](https://developers.googleblog.com/en/making-the-terminal-beautiful-one-pixel-at-a-time/)
 - **🎉 New partner extensions:**
+
   - **Arize:** Seamlessly instrument AI applications with Arize AX and grant
     direct access to Arize support:
 
@@ -656,6 +676,7 @@ on GitHub.
 ![Codebase investigator subagent in Gemini CLI.](https://i.imgur.com/4J1njsx.png)
 
 - **🎉 New partner extensions:**
+
   - **🤗 Hugging Face extension:** Access the Hugging Face hub.
     ([gif](https://drive.google.com/file/d/1LEzIuSH6_igFXq96_tWev11svBNyPJEB/view?usp=sharing&resourcekey=0-LtPTzR1woh-rxGtfPzjjfg))
 
