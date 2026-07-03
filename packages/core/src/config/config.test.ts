@@ -1928,10 +1928,9 @@ describe('Server Config (config.ts)', () => {
 
     try {
       realpathMock.mockImplementation((input) => {
-        const normalizedInput =
-          typeof input === 'string' || Buffer.isBuffer(input)
-            ? input
-            : input.toString();
+        const normalizedInput = Buffer.isBuffer(input)
+          ? input.toString()
+          : input.toString();
 
         if (normalizedInput === missingPlansDir) {
           const error = new Error(
@@ -1941,7 +1940,8 @@ describe('Server Config (config.ts)', () => {
           throw error;
         }
         if (originalImplementation) {
-          return originalImplementation(input);
+          const result = originalImplementation(input);
+          return Buffer.isBuffer(result) ? result.toString() : result;
         }
         return normalizedInput;
       });
@@ -1950,11 +1950,10 @@ describe('Server Config (config.ts)', () => {
     } finally {
       realpathMock.mockImplementation((input) => {
         if (originalImplementation) {
-          return originalImplementation(input);
+          const result = originalImplementation(input);
+          return Buffer.isBuffer(result) ? result.toString() : result;
         }
-        return typeof input === 'string' || Buffer.isBuffer(input)
-          ? input
-          : input.toString();
+        return Buffer.isBuffer(input) ? input.toString() : input.toString();
       });
     }
   });
