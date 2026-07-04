@@ -176,9 +176,9 @@ CMD ["node", "packages/a2a-server/dist/src/http/server.js"]
 
 ### OpenAI 兼容接口
 
-| 方法 | 路径                          | 说明                                    |
-| ---- | ----------------------------- | --------------------------------------- |
-| POST | `/v1/openai/chat/completions` | Chat Completions（支持 `stream: true`） |
+| 方法 | 路径                             | 说明                                    |
+| ---- | -------------------------------- | --------------------------------------- |
+| POST | `/v1/openai/v1/chat/completions` | Chat Completions（支持 `stream: true`） |
 
 ### Worker 进程管理
 
@@ -210,7 +210,7 @@ CMD ["node", "packages/a2a-server/dist/src/http/server.js"]
 **非流式请求：**
 
 ```bash
-curl -X POST http://localhost:41242/v1/openai/chat/completions \
+curl -X POST http://localhost:41242/v1/openai/v1/chat/completions \
   -H "Authorization: Bearer root" \
   -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"你好"}]}'
@@ -219,7 +219,7 @@ curl -X POST http://localhost:41242/v1/openai/chat/completions \
 **流式请求：**
 
 ```bash
-curl -X POST http://localhost:41242/v1/openai/chat/completions \
+curl -X POST http://localhost:41242/v1/openai/v1/chat/completions \
   -H "Authorization: Bearer root" \
   -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"你好"}],"stream":true}'
@@ -228,7 +228,7 @@ curl -X POST http://localhost:41242/v1/openai/chat/completions \
 **带 system prompt：**
 
 ```bash
-curl -X POST http://localhost:41242/v1/openai/chat/completions \
+curl -X POST http://localhost:41242/v1/openai/v1/chat/completions \
   -H "Authorization: Bearer root" \
   -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","messages":[{"role":"system","content":"你是一个翻译助手"},{"role":"user","content":"Hello world"}]}'
@@ -303,7 +303,7 @@ curl -X POST http://localhost:41242/v1/gemini/generateContent \
 
 ```powershell
 # OpenAI 格式
-Invoke-RestMethod -Method Post -Uri "http://localhost:41242/v1/openai/chat/completions" -Headers @{Authorization="Bearer root";"Content-Type"="application/json"} -Body '{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"Hello"}]}'
+Invoke-RestMethod -Method Post -Uri "http://localhost:41242/v1/openai/v1/chat/completions" -Headers @{Authorization="Bearer root";"Content-Type"="application/json"} -Body '{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"Hello"}]}'
 
 # Gemini 格式
 Invoke-RestMethod -Method Post -Uri "http://localhost:41242/v1/gemini/generateContent" -Headers @{Authorization="Bearer root";"Content-Type"="application/json"} -Body '{"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}'
@@ -442,7 +442,7 @@ Protocol）Worker 进程池。每个凭证对应一个常驻的 CLI 子进程，
 SillyTavern / API 客户端
     │
     ▼
-prompt-api 层（/v1/openai/*, /v1beta/models/*, /v1/gemini/*）
+prompt-api 层（/v1/openai/v1/*, /v1beta/models/*, /v1/gemini/*）
     │
     ▼
 ACP Worker 进程池

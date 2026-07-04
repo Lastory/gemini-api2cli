@@ -1437,7 +1437,7 @@ function renderEndpoints() {
   const eps = [
     ['POST','/v1/gemini/generateContent',t('epGeminiGen')],
     ['POST','/v1/gemini/streamGenerateContent',t('epGeminiStream')],
-    ['POST','/v1/openai/chat/completions',t('epOpenai')],
+    ['POST','/v1/openai/v1/chat/completions',t('epOpenai')],
     ['GET','/v1/models',t('epModels')],
     ['GET','/v1/models/current',t('epModelsCur')],
     ['PUT','/v1/models/current',t('epModelsSet')],
@@ -1629,7 +1629,7 @@ async function testCredential(credentialId, mode) {
   if (resultEl) { resultEl.className = 'cred-test-result'; resultEl.textContent = ''; }
   try {
     // Use the dedicated per-credential health-check endpoints. Unlike
-    // /v1/openai/chat/completions, these:
+    // /v1/openai/v1/chat/completions, these:
     //   - Test THIS credential only (no silent failover to other
     //     credentials, which would make a broken credential appear
     //     to "work").

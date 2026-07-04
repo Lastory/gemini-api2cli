@@ -74,7 +74,7 @@ const PUBLIC_PATHS = new Set([
 /** API paths that can be bypassed when openApi is enabled */
 const API_PATH_PREFIXES = [
   '/v1/gemini/',
-  '/v1/openai/',
+  '/v1/openai/v1/',
   '/v1/models',
   '/v1/health',
   '/v1/settings',

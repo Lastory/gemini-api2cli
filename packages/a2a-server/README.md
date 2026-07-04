@@ -19,34 +19,40 @@ API 路由。
 - `/v1/credentials*`
 - `/v1/quotas*`
 - `/v1/gemini/*`
-- `/v1/openai/*`
+- `/v1/openai/v1/*`
 
 ## 目录结构
 
 当前 HTTP 相关核心文件主要包括：
 
 - `src/http/app.ts`
+
   - Express 入口
   - 挂载 Prompt API
   - 负责与 A2A 启动链路衔接
 
 - `src/http/promptApi.ts`
+
   - Prompt API 主路由
   - Web 管理台、设置、模型、凭证、额度、Gemini/OpenAI 适配入口
 
 - `src/http/promptApiAuth.ts`
+
   - Token 鉴权中间件
   - 开放模式开关
 
 - `src/http/promptApiConsole.ts`
+
   - `/manage` 管理台页面
 
 - `src/http/promptCredentialStore.ts`
+
   - 托管凭证存储
   - 当前凭证切换
   - 凭证增删与登录状态落盘
 
 - `src/http/adapters/geminiAdapter.ts`
+
   - Gemini 风格请求/响应适配
 
 - `src/http/adapters/openaiAdapter.ts`
@@ -100,7 +106,7 @@ API 路由。
 
 ### OpenAI 兼容接口
 
-- `POST /v1/openai/chat/completions`
+- `POST /v1/openai/v1/chat/completions`
 
 ## 鉴权说明
 
@@ -142,6 +148,7 @@ Prompt API 有自己独立的鉴权层，不复用 A2A 那套简单示例鉴权�
 Google 登录采用两段式设计：
 
 1. `POST /v1/credentials/login`
+
    - 创建登录任务
    - 返回 `loginId`、`authUrl`、`redirectUri`
 
