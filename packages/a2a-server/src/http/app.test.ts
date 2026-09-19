@@ -39,6 +39,8 @@ import {
 import { MockTool } from '@google/gemini-cli-core/src/test-utils/mock-tool.js';
 import type { Command, CommandContext } from '../commands/types.js';
 
+process.env['ENABLE_A2A'] = 'true';
+
 const mockToolConfirmationFn = async () =>
   ({}) as unknown as ToolCallConfirmationDetails;
 
@@ -1254,7 +1256,7 @@ describe('E2E Tests', () => {
 
       expect(listenSpy).toHaveBeenCalledWith(
         expect.any(Number),
-        'localhost',
+        process.env['CODER_AGENT_HOST'] || '0.0.0.0',
         expect.any(Function),
       );
 

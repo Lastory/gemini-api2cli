@@ -14,20 +14,20 @@ import type {
 
 class BadRequestError extends Error {}
 
-/* eslint-disable @typescript-eslint/no-unsafe-type-assertion */
+function isGeminiPart(p: unknown): p is GeminiPart {
+  if (typeof p !== 'object' || p === null) return false;
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  const rawText = (p as Record<string, unknown>)['text'];
+  return typeof rawText === 'string';
+}
+
 function extractText(parts: unknown): string {
   if (!Array.isArray(parts)) return '';
   return parts
-    .filter(
-      (p): p is GeminiPart =>
-        typeof p === 'object' &&
-        p !== null &&
-        typeof (p as Record<string, unknown>)['text'] === 'string',
-    )
+    .filter(isGeminiPart)
     .map((p) => p.text)
     .join('');
 }
-/* eslint-enable @typescript-eslint/no-unsafe-type-assertion */
 
 function toConversationLabel(role?: string): string {
   switch (role) {
@@ -122,18 +122,15 @@ export class GeminiAdapter implements FormatAdapter {
 
     // Model — from generationConfig.model or top-level model
     let model: string | undefined;
-    if (
-      typeof b.generationConfig === 'object' &&
-      b.generationConfig !== null &&
+    const genConfig = b.generationConfig;
+    if (typeof genConfig === 'object' && genConfig !== null) {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      typeof (b.generationConfig as Record<string, unknown>)['model'] ===
-        'string'
-    ) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      model = (b.generationConfig as Record<string, unknown>)[
-        'model'
-      ] as string;
-    } else if (typeof b.model === 'string' && b.model.trim().length > 0) {
+      const configModel = (genConfig as Record<string, unknown>)['model'];
+      if (typeof configModel === 'string') {
+        model = configModel;
+      }
+    }
+    if (!model && typeof b.model === 'string' && b.model.trim().length > 0) {
       model = b.model;
     }
 

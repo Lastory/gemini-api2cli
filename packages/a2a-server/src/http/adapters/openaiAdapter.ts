@@ -26,14 +26,12 @@ function toConversationLabel(role: string): string {
 }
 
 function isMessageEntry(v: unknown): v is MessageEntry {
-  return (
-    typeof v === 'object' &&
-    v !== null &&
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    typeof (v as Record<string, unknown>)['role'] === 'string' &&
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    typeof (v as Record<string, unknown>)['content'] === 'string'
-  );
+  if (typeof v !== 'object' || v === null) return false;
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+  const rec = v as Record<string, unknown>;
+  const role = rec['role'];
+  const content = rec['content'];
+  return typeof role === 'string' && typeof content === 'string';
 }
 
 /**

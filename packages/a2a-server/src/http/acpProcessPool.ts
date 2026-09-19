@@ -158,7 +158,7 @@ function summarizePromptContent(blocks: ContentBlock[]): {
   return { summary, charCount };
 }
 
-function buildAcpChildEnv(
+export function buildAcpChildEnv(
   isolatedHomeDir: string,
   settings: AcpPoolSettings,
   credentialRecord?: PromptApiCredentialRecord,

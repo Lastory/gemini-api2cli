@@ -15,6 +15,7 @@ import type { AddressInfo } from 'node:net';
 
 // Set auth token for prompt API tests.
 process.env['GEMINI_PROMPT_API_TOKEN'] = 'test-token-for-tests';
+process.env['ENABLE_A2A'] = 'true';
 
 import { createApp, updateCoderAgentCardUrl } from './app.js';
 import type { TaskMetadata } from '../types.js';

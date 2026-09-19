@@ -43,7 +43,12 @@ import { Task } from './task.js';
 import { requestStorage } from '../http/requestStorage.js';
 import { pushTaskStateFailed } from '../utils/executor_utils.js';
 
-const SOCKET_END_ABORT_GRACE_PERIOD_MS = 30_000;
+const getSocketEndAbortGracePeriodMs = (): number => {
+  if (process.env['SOCKET_END_ABORT_GRACE_PERIOD_MS'] !== undefined) {
+    return Number(process.env['SOCKET_END_ABORT_GRACE_PERIOD_MS']);
+  }
+  return process.env['NODE_ENV'] === 'test' ? 10 : 30_000;
+};
 
 /**
  * Provides a wrapper for Task. Passes data from Task to SDKTask.
@@ -376,19 +381,20 @@ export class CoderAgentExecutor implements AgentExecutor {
           return;
         }
 
+        const gracePeriod = getSocketEndAbortGracePeriodMs();
         logger.info(
-          `[CoderAgentExecutor] Socket ended for message ${userMessage.messageId} (task ${taskId}). Waiting ${SOCKET_END_ABORT_GRACE_PERIOD_MS}ms before aborting execution loop.`,
+          `[CoderAgentExecutor] Socket ended for message ${userMessage.messageId} (task ${taskId}). Waiting ${gracePeriod}ms before aborting execution loop.`,
         );
 
         socketEndAbortTimer = setTimeout(() => {
           socketEndAbortTimer = undefined;
           if (!abortController.signal.aborted) {
             logger.info(
-              `[CoderAgentExecutor] Socket remained inactive for ${SOCKET_END_ABORT_GRACE_PERIOD_MS}ms after end for message ${userMessage.messageId} (task ${taskId}). Aborting execution loop.`,
+              `[CoderAgentExecutor] Socket remained inactive for ${gracePeriod}ms after end for message ${userMessage.messageId} (task ${taskId}). Aborting execution loop.`,
             );
             abortController.abort();
           }
-        }, SOCKET_END_ABORT_GRACE_PERIOD_MS);
+        }, gracePeriod);
       };
 
       const onSocketClose = () => {
