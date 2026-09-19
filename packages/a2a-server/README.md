@@ -93,6 +93,7 @@ API 路由。
 - `POST /v1/credentials/login`
 - `GET /v1/credentials/login/:loginId`
 - `POST /v1/credentials/login/:loginId/complete`
+- `POST /v1/credentials/vertex`
 
 ### 额度
 
@@ -161,7 +162,29 @@ Google 登录采用两段式设计：
 
 服务端还会在请求经过时清理过期登录任务，避免长期积压在内存里。
 
-## 额度与模型
+### Vertex AI 凭证
+
+支持直接添加 Google Cloud Vertex AI 凭证，与 Google
+OAuth 个人凭证混合管理与无缝轮询：
+
+- `POST /v1/credentials/vertex`
+  - Body 支持参数：
+    - `label`: 凭证自定义标签（可选）
+    - `project`: GCP Project ID（必填，若使用 apiKey 则可选）
+    - `location`: GCP 区域，例如 `us-central1`（必填，若使用 apiKey 则可选）
+    - `serviceAccountJson`: Service Account 密钥 JSON 字符串或对象（可选）
+    - `apiKey`: Vertex AI API Key（可选）
+    - `baseUrl`: 自定义端点 Base URL（可选）
+  - 支持三种模式：
+    1. **Service Account Key**：直接传入完整
+       `serviceAccountJson`，持久化并在 ACP Worker 启动时注入
+       `GOOGLE_APPLICATION_CREDENTIALS`。
+    2. **Vertex AI API Key**：直接传入 `apiKey`，Worker 启动时注入
+       `VERTEXAI_API_KEY`。
+    3. **Application Default Credentials (ADC)**：留空服务账号与 API
+       Key，仅需指定 `project` 和 `location`，自动沿用系统环境凭据。
+
+### 额度与模型
 
 额度接口基于当前托管凭证读取上游 quota buckets，并返回：
 

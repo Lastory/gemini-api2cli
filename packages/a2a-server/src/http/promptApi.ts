@@ -81,6 +81,7 @@ export const PROMPT_API_CREDENTIAL_LOGIN_COMPLETE_ROUTE =
   '/v1/credentials/login/:loginId/complete';
 export const PROMPT_API_QUOTAS_ROUTE = '/v1/quotas';
 export const PROMPT_API_QUOTA_ROUTE = '/v1/quotas/:credentialId';
+export const PROMPT_API_CREDENTIAL_VERTEX_ROUTE = '/v1/credentials/vertex';
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const LOGIN_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -625,11 +626,19 @@ function getPromptApiCredentialPayload(
 ) {
   return {
     id: credential.id,
+    type: credential.type ?? 'oauth',
     label: credential.label,
     ...(credential.email ? { email: credential.email } : {}),
     createdAt: credential.createdAt,
     updatedAt: credential.updatedAt,
     ...(credential.lastLoginAt ? { lastLoginAt: credential.lastLoginAt } : {}),
+    ...(credential.project ? { project: credential.project } : {}),
+    ...(credential.location ? { location: credential.location } : {}),
+    ...(credential.hasServiceAccount !== undefined
+      ? { hasServiceAccount: credential.hasServiceAccount }
+      : {}),
+    ...(credential.apiKey ? { hasApiKey: true } : {}),
+    ...(credential.baseUrl ? { baseUrl: credential.baseUrl } : {}),
     isCurrent: credential.id === currentCredentialId,
     // Empty array (not undefined) so the UI can rely on `.length`
     // without an extra null check on every render.
@@ -870,6 +879,21 @@ async function getPromptApiCredentialQuotaPayload(
   const credentialHomeDir = state.credentialStore.getCredentialHomeDir(
     credential.id,
   );
+
+  if (credential.type === 'vertex-ai') {
+    return {
+      credential: credentialPayload,
+      status: 'ok' as PromptApiCredentialQuotaStatus,
+      authType: 'vertex-ai',
+      project: credential.project,
+      location: credential.location,
+      hasServiceAccount: credential.hasServiceAccount,
+      hasApiKey: !!credential.apiKey,
+      sessionPolicy: 'per-request',
+      quota: null,
+    };
+  }
+
   const oauthPath = getPromptCredentialOauthPath(credentialHomeDir);
 
   if (!existsSync(oauthPath)) {
@@ -1636,6 +1660,10 @@ async function getAcpWorkerAndSession(
 ) {
   const { credentialId, homeDir: credentialHomeDir } =
     await getEffectiveCredentialIdAndHome(deps, state);
+  const cred =
+    credentialId !== 'default'
+      ? await state.credentialStore.getCredential(credentialId)
+      : undefined;
 
   const worker = await state.acpPool.getOrCreate(
     credentialId,
@@ -1650,6 +1678,7 @@ async function getAcpWorkerAndSession(
       failoverWorkers: state.settings.failoverWorkers,
       keepaliveIntervalMs: state.settings.acpKeepaliveIntervalMs,
     },
+    cred,
   );
 
   // Create a fresh session per request to avoid server-side context accumulation.
@@ -1977,16 +2006,21 @@ async function getAcpWorkerAndSessionExcluding(
     if (hasCredentialWideCooldown(state, cred.id)) continue;
     const homeDir = state.credentialStore.getCredentialHomeDir(cred.id);
     try {
-      const worker = await state.acpPool.getOrCreate(cred.id, homeDir, {
-        idleTimeoutMs: state.settings.acpIdleTimeoutMs,
-        mcpEnabled: state.settings.mcpEnabled,
-        extensionsEnabled: state.settings.extensionsEnabled,
-        skillsEnabled: state.settings.skillsEnabled,
-        proxyUrl: state.settings.proxyUrl,
-        maxWorkers: state.settings.maxWorkers,
-        failoverWorkers: state.settings.failoverWorkers,
-        keepaliveIntervalMs: state.settings.acpKeepaliveIntervalMs,
-      });
+      const worker = await state.acpPool.getOrCreate(
+        cred.id,
+        homeDir,
+        {
+          idleTimeoutMs: state.settings.acpIdleTimeoutMs,
+          mcpEnabled: state.settings.mcpEnabled,
+          extensionsEnabled: state.settings.extensionsEnabled,
+          skillsEnabled: state.settings.skillsEnabled,
+          proxyUrl: state.settings.proxyUrl,
+          maxWorkers: state.settings.maxWorkers,
+          failoverWorkers: state.settings.failoverWorkers,
+          keepaliveIntervalMs: state.settings.acpKeepaliveIntervalMs,
+        },
+        cred,
+      );
       const sessionId = await worker.createSession();
       return { worker, sessionId, credentialId: cred.id };
     } catch {
@@ -2768,7 +2802,13 @@ export function createPromptApiRouter(
         deps,
         state,
       );
-      await state.acpPool.warmUp(credentialId, homeDir, poolSettings);
+      const primaryCred = credentials.find((c) => c.id === credentialId);
+      await state.acpPool.warmUp(
+        credentialId,
+        homeDir,
+        poolSettings,
+        primaryCred,
+      );
 
       // Warm up failover workers with other credentials
       const failoverCount = state.settings.failoverWorkers;
@@ -2781,7 +2821,12 @@ export function createPromptApiRouter(
             cred.id,
           );
           try {
-            await state.acpPool.warmUp(cred.id, credHomeDir, poolSettings);
+            await state.acpPool.warmUp(
+              cred.id,
+              credHomeDir,
+              poolSettings,
+              cred,
+            );
             warmed++;
             logger.info(
               `[ACP] Failover worker ${warmed}/${failoverCount} warmed: "${cred.label}"`,
@@ -3079,6 +3124,72 @@ export function createPromptApiRouter(
     const requestModel = state.currentModel;
     const startTime = Date.now();
     const homeDir = state.credentialStore.getCredentialHomeDir(credentialId);
+
+    if (credential.type === 'vertex-ai') {
+      try {
+        const worker = await state.acpPool.getOrCreate(
+          credentialId,
+          homeDir,
+          {
+            idleTimeoutMs: state.settings.acpIdleTimeoutMs,
+            mcpEnabled: state.settings.mcpEnabled,
+            extensionsEnabled: state.settings.extensionsEnabled,
+            skillsEnabled: state.settings.skillsEnabled,
+            proxyUrl: state.settings.proxyUrl,
+            maxWorkers: state.settings.maxWorkers,
+            failoverWorkers: state.settings.failoverWorkers,
+            keepaliveIntervalMs: state.settings.acpKeepaliveIntervalMs,
+          },
+          credential,
+        );
+
+        const sessionId = await worker.createSession();
+        try {
+          if (mode === 'auth') {
+            return res.status(200).json({
+              ok: true,
+              credentialId,
+              durationMs: Date.now() - startTime,
+              reply: `OK — Vertex AI ready (Project: ${credential.project ?? 'default'}, Region: ${credential.location ?? 'us-central1'})`,
+            });
+          }
+
+          let replySnippet = '';
+          await worker.prompt(
+            sessionId,
+            [{ type: 'text', text: 'hi' }],
+            (update: SessionNotification) => {
+              if (
+                update.update.sessionUpdate === 'agent_message_chunk' &&
+                update.update.content.type === 'text'
+              ) {
+                replySnippet += update.update.content.text;
+              }
+            },
+          );
+          return res.status(200).json({
+            ok: true,
+            credentialId,
+            durationMs: Date.now() - startTime,
+            reply: replySnippet.trim()
+              ? `OK (Vertex AI) — "${replySnippet.trim().slice(0, 80)}"`
+              : 'OK (Vertex AI)',
+          });
+        } finally {
+          worker.destroySession(sessionId);
+        }
+      } catch (err) {
+        const durationMs = Date.now() - startTime;
+        const errMsg = extractErrorMessage(err);
+        return res.status(200).json({
+          ok: false,
+          credentialId,
+          durationMs,
+          error: `Vertex AI test failed: ${errMsg}`,
+        });
+      }
+    }
+
     const oauthPath = getPromptCredentialOauthPath(homeDir);
 
     // Sanity: missing oauth_creds.json means the credential was
@@ -3529,6 +3640,9 @@ export function createPromptApiRouter(
       const currentCredentialId =
         await state.credentialStore.getCurrentCredentialId();
       const credentialId = currentCredentialId ?? 'default';
+      const cred = currentCredentialId
+        ? await state.credentialStore.getCredential(currentCredentialId)
+        : undefined;
 
       const worker = await state.acpPool.getOrCreate(
         credentialId,
@@ -3542,6 +3656,7 @@ export function createPromptApiRouter(
           maxWorkers: state.settings.maxWorkers,
           failoverWorkers: state.settings.failoverWorkers,
         },
+        cred,
       );
       const sessionId = await worker.createSession();
       return res.status(200).json({ sessionId, credentialId });
@@ -3685,6 +3800,87 @@ export function createPromptApiRouter(
         currentCredential: getPromptApiCredentialPayload(
           credential,
           credential.id,
+        ),
+        sessionPolicy: 'per-request',
+      });
+    } catch (error) {
+      if (error instanceof BadRequestError) {
+        return res.status(400).json({ error: error.message });
+      }
+
+      logPromptApiError(error);
+      return res.status(500).json({
+        error:
+          error instanceof Error ? error.message : 'Unknown prompt API error',
+      });
+    }
+  });
+
+  router.post(PROMPT_API_CREDENTIAL_VERTEX_ROUTE, async (req, res) => {
+    try {
+      if (!isObject(req.body)) {
+        throw new BadRequestError('Request body must be a JSON object.');
+      }
+      const b = req.body;
+      const rawProject = b['project'];
+      const rawLocation = b['location'];
+      const rawApiKey = b['apiKey'];
+      const rawLabel = b['label'];
+      const rawBaseUrl = b['baseUrl'];
+      const rawServiceAccountJson = b['serviceAccountJson'];
+
+      const project = typeof rawProject === 'string' ? rawProject.trim() : '';
+      const location =
+        typeof rawLocation === 'string' ? rawLocation.trim() : '';
+      const apiKey =
+        typeof rawApiKey === 'string' ? rawApiKey.trim() : undefined;
+      const label = typeof rawLabel === 'string' ? rawLabel.trim() : undefined;
+      const baseUrl =
+        typeof rawBaseUrl === 'string' ? rawBaseUrl.trim() : undefined;
+      let serviceAccountJson: string | undefined;
+
+      if (rawServiceAccountJson !== undefined) {
+        if (
+          typeof rawServiceAccountJson === 'object' &&
+          rawServiceAccountJson !== null
+        ) {
+          serviceAccountJson = JSON.stringify(rawServiceAccountJson);
+        } else if (typeof rawServiceAccountJson === 'string') {
+          const raw = rawServiceAccountJson.trim();
+          if (raw.length > 0) {
+            try {
+              JSON.parse(raw);
+              serviceAccountJson = raw;
+            } catch {
+              throw new BadRequestError(
+                '"serviceAccountJson" must be a valid JSON string.',
+              );
+            }
+          }
+        }
+      }
+
+      if (!apiKey && (!project || !location)) {
+        throw new BadRequestError(
+          'Either "apiKey" OR both "project" and "location" are required for Vertex AI.',
+        );
+      }
+
+      const credential = await state.credentialStore.createVertexCredential({
+        label,
+        project: project || 'default',
+        location: location || 'us-central1',
+        serviceAccountJson,
+        apiKey,
+        baseUrl,
+      });
+
+      const currentCredentialId =
+        await state.credentialStore.getCurrentCredentialId();
+      return res.status(201).json({
+        credential: getPromptApiCredentialPayload(
+          credential,
+          currentCredentialId,
         ),
         sessionPolicy: 'per-request',
       });

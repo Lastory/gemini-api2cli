@@ -13,7 +13,7 @@ CLI 作为底层执行引擎，在此之上增加了浏览器管理台、Token �
 - 提供浏览器管理台 `/manage`（支持中文 / 英文切换）
 - 将 Gemini CLI 封装为 HTTP API 服务
 - **ACP 常驻进程模式**：CLI 进程常驻复用，每请求独立 session，大幅降低延迟
-- 支持多个 Google OAuth 凭证的托管与切换
+- 支持多个 Google OAuth 凭证与 Vertex AI 凭证的托管、混合管理与无缝切换
 - 支持凭证轮询（Round-Robin）与**请求级自动故障转移**（429/配额耗尽时自动切换凭证重试）
 - 支持 Worker 进程池管理（可配置最大进程数）
 - 支持额度查询与登录状态轮询
@@ -149,16 +149,17 @@ CMD ["node", "packages/a2a-server/dist/src/http/server.js"]
 
 ### 凭证管理
 
-| 方法   | 路径                                      | 说明                 |
-| ------ | ----------------------------------------- | -------------------- |
-| GET    | `/v1/credentials`                         | 列出所有凭证         |
-| DELETE | `/v1/credentials`                         | 删除所有凭证         |
-| DELETE | `/v1/credentials/:credentialId`           | 删除指定凭证         |
-| GET    | `/v1/credentials/current`                 | 获取当前活跃凭证     |
-| PUT    | `/v1/credentials/current`                 | 切换活跃凭证         |
-| POST   | `/v1/credentials/login`                   | 发起 Google 账号登录 |
-| GET    | `/v1/credentials/login/:loginId`          | 查询登录状态         |
-| POST   | `/v1/credentials/login/:loginId/complete` | 完成登录回调         |
+| 方法   | 路径                                      | 说明                                                        |
+| ------ | ----------------------------------------- | ----------------------------------------------------------- |
+| GET    | `/v1/credentials`                         | 列出所有凭证                                                |
+| DELETE | `/v1/credentials`                         | 删除所有凭证                                                |
+| DELETE | `/v1/credentials/:credentialId`           | 删除指定凭证                                                |
+| GET    | `/v1/credentials/current`                 | 获取当前活跃凭证                                            |
+| PUT    | `/v1/credentials/current`                 | 切换活跃凭证                                                |
+| POST   | `/v1/credentials/login`                   | 发起 Google 账号登录                                        |
+| GET    | `/v1/credentials/login/:loginId`          | 查询登录状态                                                |
+| POST   | `/v1/credentials/login/:loginId/complete` | 完成登录回调                                                |
+| POST   | `/v1/credentials/vertex`                  | 添加 Vertex AI 凭证（支持 Service Account / API Key / ADC） |
 
 ### 额度
 
@@ -307,6 +308,37 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:41242/v1/openai/v1/chat/co
 
 # Gemini 格式
 Invoke-RestMethod -Method Post -Uri "http://localhost:41242/v1/gemini/generateContent" -Headers @{Authorization="Bearer root";"Content-Type"="application/json"} -Body '{"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}'
+```
+
+### 添加 Vertex AI 凭证
+
+除了在 Web 管理台页面 `/manage` 的 Vertex
+AI 标签页直接添加外，也可以通过 API 添加：
+
+**使用 Service Account 密钥：**
+
+```bash
+curl -X POST http://localhost:41242/v1/credentials/vertex \
+  -H "Authorization: Bearer root" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "label": "GCP 生产环境",
+    "project": "my-gcp-project-123",
+    "location": "us-central1",
+    "serviceAccountJson": "{\"type\": \"service_account\", ...}"
+  }'
+```
+
+**使用 Vertex API Key：**
+
+```bash
+curl -X POST http://localhost:41242/v1/credentials/vertex \
+  -H "Authorization: Bearer root" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "label": "GCP Vertex API Key",
+    "apiKey": "AQ.AIzaSy..."
+  }'
 ```
 
 ## 如何指定模型

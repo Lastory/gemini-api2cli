@@ -16,14 +16,32 @@ type PromptCredentialStoreState = {
   currentCredentialId?: string;
 };
 
+export type PromptCredentialType = 'oauth' | 'vertex-ai';
+
 export type PromptApiCredentialRecord = {
   id: string;
+  type?: PromptCredentialType;
   label: string;
   email?: string;
   createdAt: string;
   updatedAt: string;
   lastLoginAt?: string;
+  project?: string;
+  location?: string;
+  hasServiceAccount?: boolean;
+  apiKey?: string;
+  baseUrl?: string;
 };
+
+export interface CreateVertexCredentialParams {
+  label?: string;
+  credentialId?: string;
+  project: string;
+  location: string;
+  serviceAccountJson?: string;
+  apiKey?: string;
+  baseUrl?: string;
+}
 
 const SAFE_CREDENTIAL_ID_RE = /^[a-zA-Z0-9_-]+$/;
 
@@ -95,9 +113,11 @@ export class PromptCredentialStore {
     credentialId?: string,
   ): Promise<PromptApiCredentialRecord> {
     const id = credentialId ?? randomUUID();
+    assertSafeCredentialId(id);
     const now = new Date().toISOString();
     const record: PromptApiCredentialRecord = {
       id,
+      type: 'oauth',
       label: label?.trim() || `Credential ${id.slice(0, 8)}`,
       createdAt: now,
       updatedAt: now,
@@ -109,6 +129,53 @@ export class PromptCredentialStore {
       JSON.stringify(record, null, 2),
       'utf8',
     );
+    return record;
+  }
+
+  async createVertexCredential(
+    params: CreateVertexCredentialParams,
+  ): Promise<PromptApiCredentialRecord> {
+    const id = params.credentialId ?? randomUUID();
+    assertSafeCredentialId(id);
+    const now = new Date().toISOString();
+    const hasServiceAccount = Boolean(
+      params.serviceAccountJson && params.serviceAccountJson.trim().length > 0,
+    );
+
+    const record: PromptApiCredentialRecord = {
+      id,
+      type: 'vertex-ai',
+      label: params.label?.trim() || `Vertex AI (${params.project})`,
+      createdAt: now,
+      updatedAt: now,
+      project: params.project.trim(),
+      location: params.location.trim(),
+      hasServiceAccount,
+      ...(params.apiKey?.trim() ? { apiKey: params.apiKey.trim() } : {}),
+      ...(params.baseUrl?.trim() ? { baseUrl: params.baseUrl.trim() } : {}),
+    };
+
+    const credentialDir = this.getCredentialDir(id);
+    const homeDir = this.getCredentialHomeDir(id);
+    await mkdir(credentialDir, { recursive: true });
+    await mkdir(homeDir, { recursive: true });
+
+    if (hasServiceAccount && params.serviceAccountJson) {
+      const saPath = path.join(homeDir, 'service-account.json');
+      await writeFile(saPath, params.serviceAccountJson.trim(), 'utf8');
+    }
+
+    await writeFile(
+      this.getCredentialMetadataPath(id),
+      JSON.stringify(record, null, 2),
+      'utf8',
+    );
+
+    const current = await this.getCurrentCredentialId();
+    if (!current) {
+      await this.setCurrentCredential(id);
+    }
+
     return record;
   }
 

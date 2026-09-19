@@ -17,7 +17,8 @@ package names still refer to `gemini-cli` or `a2a-server`.
 - Wraps Gemini CLI as an HTTP API service
 - **ACP persistent-process mode**: CLI processes stay alive and are reused; each
   request gets its own session, drastically reducing latency
-- Supports managed Google OAuth credentials with switchable active account
+- Supports managed Google OAuth and Vertex AI credentials with hybrid rotation
+  and seamless switching
 - Supports credential rotation (round-robin) and **per-request automatic
   failover** (auto-switches credential on 429 / quota exhaustion)
 - Supports Worker process pool management (configurable max workers and failover
@@ -162,16 +163,17 @@ CMD ["node", "packages/a2a-server/dist/src/http/server.js"]
 
 ### Credentials
 
-| Method | Path                                      | Description                  |
-| ------ | ----------------------------------------- | ---------------------------- |
-| GET    | `/v1/credentials`                         | List all credentials         |
-| DELETE | `/v1/credentials`                         | Delete all credentials       |
-| DELETE | `/v1/credentials/:credentialId`           | Delete a specific credential |
-| GET    | `/v1/credentials/current`                 | Get the active credential    |
-| PUT    | `/v1/credentials/current`                 | Switch active credential     |
-| POST   | `/v1/credentials/login`                   | Start Google account login   |
-| GET    | `/v1/credentials/login/:loginId`          | Poll login status            |
-| POST   | `/v1/credentials/login/:loginId/complete` | Complete login callback      |
+| Method | Path                                      | Description                                                |
+| ------ | ----------------------------------------- | ---------------------------------------------------------- |
+| GET    | `/v1/credentials`                         | List all credentials                                       |
+| DELETE | `/v1/credentials`                         | Delete all credentials                                     |
+| DELETE | `/v1/credentials/:credentialId`           | Delete a specific credential                               |
+| GET    | `/v1/credentials/current`                 | Get the active credential                                  |
+| PUT    | `/v1/credentials/current`                 | Switch active credential                                   |
+| POST   | `/v1/credentials/login`                   | Start Google account login                                 |
+| GET    | `/v1/credentials/login/:loginId`          | Poll login status                                          |
+| POST   | `/v1/credentials/login/:loginId/complete` | Complete login callback                                    |
+| POST   | `/v1/credentials/vertex`                  | Add Vertex AI credential (Service Account / API Key / ADC) |
 
 ### Quotas
 
@@ -321,6 +323,37 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:41242/v1/openai/v1/chat/co
 
 # Gemini format
 Invoke-RestMethod -Method Post -Uri "http://localhost:41242/v1/gemini/generateContent" -Headers @{Authorization="Bearer root";"Content-Type"="application/json"} -Body '{"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}'
+```
+
+### Adding Vertex AI Credentials
+
+In addition to adding credentials via the Vertex AI tab in the `/manage` web
+console, you can also add them via the API:
+
+**Using Service Account Key JSON:**
+
+```bash
+curl -X POST http://localhost:41242/v1/credentials/vertex \
+  -H "Authorization: Bearer root" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "label": "GCP Production",
+    "project": "my-gcp-project-123",
+    "location": "us-central1",
+    "serviceAccountJson": "{\"type\": \"service_account\", ...}"
+  }'
+```
+
+**Using Vertex API Key:**
+
+```bash
+curl -X POST http://localhost:41242/v1/credentials/vertex \
+  -H "Authorization: Bearer root" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "label": "GCP Vertex API Key",
+    "apiKey": "AQ.AIzaSy..."
+  }'
 ```
 
 ## Specifying Models

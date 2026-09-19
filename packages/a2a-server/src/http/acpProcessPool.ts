@@ -16,6 +16,7 @@ import type {
   ContentBlock,
 } from '@agentclientprotocol/sdk';
 import { logger } from '../utils/logger.js';
+import type { PromptApiCredentialRecord } from './promptCredentialStore.js';
 
 // Re-export types for consumers
 export type { ContentBlock, SessionNotification };
@@ -160,6 +161,7 @@ function summarizePromptContent(blocks: ContentBlock[]): {
 function buildAcpChildEnv(
   isolatedHomeDir: string,
   settings: AcpPoolSettings,
+  credentialRecord?: PromptApiCredentialRecord,
 ): NodeJS.ProcessEnv {
   const env = { ...process.env };
 
@@ -168,9 +170,39 @@ function buildAcpChildEnv(
   env['GEMINI_CLI_NO_RELAUNCH'] = 'true';
 
   env['GEMINI_CLI_HOME'] = isolatedHomeDir;
-  env['GOOGLE_GENAI_USE_GCA'] = 'true';
   env['HOME'] = isolatedHomeDir;
   env['USERPROFILE'] = isolatedHomeDir;
+
+  if (credentialRecord?.type === 'vertex-ai') {
+    env['GOOGLE_GENAI_USE_VERTEXAI'] = 'true';
+    delete env['GOOGLE_GENAI_USE_GCA'];
+    if (credentialRecord.project) {
+      env['GOOGLE_CLOUD_PROJECT'] = credentialRecord.project;
+      env['GOOGLE_CLOUD_PROJECT_ID'] = credentialRecord.project;
+    }
+    if (credentialRecord.location) {
+      env['GOOGLE_CLOUD_LOCATION'] = credentialRecord.location;
+    }
+    if (credentialRecord.apiKey) {
+      env['GOOGLE_API_KEY'] = credentialRecord.apiKey;
+    }
+    if (credentialRecord.baseUrl) {
+      env['GOOGLE_VERTEX_BASE_URL'] = credentialRecord.baseUrl;
+    }
+    const saPath = path.join(isolatedHomeDir, 'service-account.json');
+    if (existsSync(saPath)) {
+      env['GOOGLE_APPLICATION_CREDENTIALS'] = saPath;
+    }
+  } else {
+    env['GOOGLE_GENAI_USE_GCA'] = 'true';
+    delete env['GOOGLE_GENAI_USE_VERTEXAI'];
+    delete env['GOOGLE_CLOUD_PROJECT'];
+    delete env['GOOGLE_CLOUD_PROJECT_ID'];
+    delete env['GOOGLE_CLOUD_LOCATION'];
+    delete env['GOOGLE_APPLICATION_CREDENTIALS'];
+    delete env['GOOGLE_API_KEY'];
+    delete env['GOOGLE_VERTEX_BASE_URL'];
+  }
 
   if (!settings.mcpEnabled) {
     env['GEMINI_MCP_DISABLED'] = 'true';
@@ -214,6 +246,7 @@ function extractErrorMessage(err: unknown): string {
  */
 export class AcpWorker {
   credentialId: string;
+  credentialRecord?: PromptApiCredentialRecord;
   readonly createdAt: number = Date.now();
   private child: ChildProcessWithoutNullStreams | undefined;
   private connection: acp.ClientSideConnection | undefined;
@@ -323,7 +356,9 @@ export class AcpWorker {
     deps: AcpPoolDeps,
     settings: AcpPoolSettings,
     credentialHomeDir: string,
+    credentialRecord?: PromptApiCredentialRecord,
   ): Promise<void> {
+    this.credentialRecord = credentialRecord;
     // Create isolated temp directory for this worker
     this.tempDir = await mkdtemp(path.join(tmpdir(), 'gemini-acp-'));
     const homeDir = path.join(this.tempDir, 'home');
@@ -333,19 +368,29 @@ export class AcpWorker {
     await mkdir(cwd, { recursive: true });
     this.workspaceCwd = cwd;
 
-    // Copy credential files from source
-    const credFiles = ['oauth_creds.json', 'gemini-credentials.json'];
-    const sourceGeminiDir = path.join(credentialHomeDir, GEMINI_DIR_NAME);
-    for (const file of credFiles) {
-      const src = path.join(sourceGeminiDir, file);
-      if (existsSync(src)) {
-        await copyFile(src, path.join(geminiDir, file));
+    if (credentialRecord?.type === 'vertex-ai') {
+      const sourceSaPath = path.join(credentialHomeDir, 'service-account.json');
+      if (existsSync(sourceSaPath)) {
+        await copyFile(
+          sourceSaPath,
+          path.join(homeDir, 'service-account.json'),
+        );
+      }
+    } else {
+      // Copy credential files from source
+      const credFiles = ['oauth_creds.json', 'gemini-credentials.json'];
+      const sourceGeminiDir = path.join(credentialHomeDir, GEMINI_DIR_NAME);
+      for (const file of credFiles) {
+        const src = path.join(sourceGeminiDir, file);
+        if (existsSync(src)) {
+          await copyFile(src, path.join(geminiDir, file));
+        }
       }
     }
 
     const args = ['--no-warnings=DEP0040', deps.cliEntryPath, '--acp'];
 
-    const env = buildAcpChildEnv(homeDir, settings);
+    const env = buildAcpChildEnv(homeDir, settings, credentialRecord);
 
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     this.child = deps.spawnProcess(process.execPath, args, {
@@ -431,8 +476,12 @@ export class AcpWorker {
         capabilities: {},
       });
 
+      const methodId =
+        this.credentialRecord?.type === 'vertex-ai'
+          ? 'vertex-ai'
+          : 'oauth-personal';
       await this.connection.authenticate({
-        methodId: 'oauth-personal',
+        methodId,
       });
 
       this._state = 'ready';
@@ -688,34 +737,62 @@ export class AcpWorker {
   async switchCredential(
     newCredentialId: string,
     newCredentialHomeDir: string,
+    newCredentialRecord?: PromptApiCredentialRecord,
   ): Promise<void> {
     if (this._state !== 'ready' || !this.connection || !this.tempDir) {
       throw new Error('ACP worker not ready for credential switch');
     }
+    const currentType = this.credentialRecord?.type ?? 'oauth';
+    const newType = newCredentialRecord?.type ?? 'oauth';
+    if (currentType !== newType) {
+      throw new Error(
+        `Cannot switch between different credential types (${currentType} vs ${newType}) in a running worker`,
+      );
+    }
 
-    // Clear old credential files, then copy new ones
-    const geminiDir = path.join(this.tempDir, 'home', GEMINI_DIR_NAME);
-    const sourceGeminiDir = path.join(newCredentialHomeDir, GEMINI_DIR_NAME);
-    const credFiles = ['oauth_creds.json', 'gemini-credentials.json'];
-    for (const file of credFiles) {
-      const target = path.join(geminiDir, file);
+    const homeDir = path.join(this.tempDir, 'home');
+    const geminiDir = path.join(homeDir, GEMINI_DIR_NAME);
+
+    if (newType === 'vertex-ai') {
+      const saTarget = path.join(homeDir, 'service-account.json');
       try {
-        await unlink(target);
+        await unlink(saTarget);
       } catch {
         /* file may not exist */
       }
-      const src = path.join(sourceGeminiDir, file);
-      if (existsSync(src)) {
-        await copyFile(src, target);
+      const sourceSaPath = path.join(
+        newCredentialHomeDir,
+        'service-account.json',
+      );
+      if (existsSync(sourceSaPath)) {
+        await copyFile(sourceSaPath, saTarget);
+      }
+    } else {
+      // Clear old credential files, then copy new ones
+      const sourceGeminiDir = path.join(newCredentialHomeDir, GEMINI_DIR_NAME);
+      const credFiles = ['oauth_creds.json', 'gemini-credentials.json'];
+      for (const file of credFiles) {
+        const target = path.join(geminiDir, file);
+        try {
+          await unlink(target);
+        } catch {
+          /* file may not exist */
+        }
+        const src = path.join(sourceGeminiDir, file);
+        if (existsSync(src)) {
+          await copyFile(src, target);
+        }
       }
     }
 
     // Re-authenticate with the new credentials
+    const methodId = newType === 'vertex-ai' ? 'vertex-ai' : 'oauth-personal';
     await this.connection.authenticate({
-      methodId: 'oauth-personal',
+      methodId,
     });
 
     this.credentialId = newCredentialId;
+    this.credentialRecord = newCredentialRecord;
     this.touchActivity();
     logger.info(`[ACP] Worker switched credential to ${newCredentialId}`);
   }
@@ -881,7 +958,11 @@ export class AcpWorker {
     // CLI doesn't multiplex, and we'd block both calls.
     if (this.promptListeners.size > 0) return;
     try {
-      await this.connection.authenticate({ methodId: 'oauth-personal' });
+      const methodId =
+        this.credentialRecord?.type === 'vertex-ai'
+          ? 'vertex-ai'
+          : 'oauth-personal';
+      await this.connection.authenticate({ methodId });
       // Don't call touchActivity() here — keepalives shouldn't push
       // back the idle timeout. The whole point is to refresh the
       // connection without making the worker look "active" to the
@@ -919,6 +1000,7 @@ export class AcpProcessPool {
     credentialId: string,
     credentialHomeDir: string,
     settings: AcpPoolSettings,
+    credentialRecord?: PromptApiCredentialRecord,
   ): Promise<AcpWorker> {
     let worker = this.workers.get(credentialId);
     if (worker && worker.state === 'ready') {
@@ -957,7 +1039,11 @@ export class AcpProcessPool {
           logger.info(
             `[ACP] Pool at capacity (${max}), switching worker ${reuseKey} → ${credentialId}`,
           );
-          await reuseWorker.switchCredential(credentialId, credentialHomeDir);
+          await reuseWorker.switchCredential(
+            credentialId,
+            credentialHomeDir,
+            credentialRecord,
+          );
           // Re-key in the map
           this.workers.delete(reuseKey);
           this.workers.set(credentialId, reuseWorker);
@@ -1000,7 +1086,12 @@ export class AcpProcessPool {
     this.workers.set(credentialId, worker);
 
     try {
-      await worker.start(this.deps, settings, credentialHomeDir);
+      await worker.start(
+        this.deps,
+        settings,
+        credentialHomeDir,
+        credentialRecord,
+      );
     } catch (err) {
       this.workers.delete(credentialId);
       throw err;
@@ -1053,18 +1144,23 @@ export class AcpProcessPool {
   }
 
   /**
-   * Get the recent-prompts ring buffer for a specific worker. Returns
-   * an empty array if the worker doesn't exist (callers don't need to
-   * distinguish "no worker" from "no recent prompts" — both render
-   * identically in the UI).
+   * Snapshot recent-prompts ring buffer for a specific worker.
+   * Returns empty array if the worker isn't currently alive.
    */
   getRecentPrompts(credentialId: string): AcpPromptRecord[] {
-    const worker = this.workers.get(credentialId);
-    return worker ? worker.getRecentPrompts() : [];
+    return this.workers.get(credentialId)?.getRecentPrompts() ?? [];
   }
 
   /**
-   * Find the worker that owns a session.
+   * Snapshot the stderr tail for a specific worker.
+   * Returns empty string if the worker isn't currently alive.
+   */
+  getStderrTail(credentialId: string): string {
+    return this.workers.get(credentialId)?.getStderrTail() ?? '';
+  }
+
+  /**
+   * Find which worker owns a given session ID.
    */
   findWorkerBySession(sessionId: string): AcpWorker | undefined {
     for (const worker of this.workers.values()) {
@@ -1115,9 +1211,15 @@ export class AcpProcessPool {
     credentialId: string,
     credentialHomeDir: string,
     settings: AcpPoolSettings,
+    credentialRecord?: PromptApiCredentialRecord,
   ): Promise<void> {
     try {
-      await this.getOrCreate(credentialId, credentialHomeDir, settings);
+      await this.getOrCreate(
+        credentialId,
+        credentialHomeDir,
+        settings,
+        credentialRecord,
+      );
       logger.info(`[ACP] Worker pre-warmed for credential ${credentialId}`);
     } catch (err) {
       logger.warn(

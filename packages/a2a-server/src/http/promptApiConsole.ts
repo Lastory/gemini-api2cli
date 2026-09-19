@@ -297,8 +297,14 @@ a{color:var(--accent);text-decoration:none}
   <!-- Status Bar -->
   <div class="status-bar" id="status-bar"></div>
 
-  <!-- Row 1: Login + Complete Login -->
-  <div class="grid grid-23" style="margin-bottom:16px">
+  <!-- Row 1: Add Credential (Tabs for Google OAuth vs Vertex AI) -->
+  <div class="row" style="margin-bottom:12px;gap:8px">
+    <button class="btn btn-primary btn-sm" id="tab-btn-oauth">Google OAuth</button>
+    <button class="btn btn-outline btn-sm" id="tab-btn-vertex">Vertex AI</button>
+  </div>
+
+  <!-- Google OAuth Section -->
+  <div id="cred-add-oauth" class="grid grid-23" style="margin-bottom:16px">
 
     <!-- Start Login -->
     <div class="card">
@@ -339,6 +345,46 @@ a{color:var(--accent);text-decoration:none}
         </div>
         <div id="login-meta" style="color:var(--text3);font-size:13px"></div>
         <div id="login-output" class="code-block" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Vertex AI Section -->
+  <div id="cred-add-vertex" class="card" style="margin-bottom:16px;display:none">
+    <div class="card-title" id="t-add-vertex-title">Add Vertex AI Credential</div>
+    <div class="card-desc" id="t-add-vertex-desc">Add a Google Cloud Vertex AI credential using a Service Account or API key.</div>
+    <div class="stack" style="max-width:800px">
+      <div class="grid grid-2" style="gap:12px">
+        <div class="field">
+          <span class="label" id="t-vertex-cred-label">Credential Label</span>
+          <input id="vertex-label" class="input" placeholder="e.g. GCP Production"/>
+        </div>
+        <div class="field">
+          <span class="label" id="t-vertex-project">GCP Project ID</span>
+          <input id="vertex-project" class="input" placeholder="e.g. my-gcp-project-123"/>
+        </div>
+      </div>
+      <div class="grid grid-2" style="gap:12px">
+        <div class="field">
+          <span class="label" id="t-vertex-location">Location / Region</span>
+          <input id="vertex-location" class="input" value="us-central1" placeholder="e.g. us-central1"/>
+        </div>
+        <div class="field">
+          <span class="label" id="t-vertex-api-key">Vertex API Key (Optional)</span>
+          <input id="vertex-api-key" class="input" placeholder="Leave empty if using Service Account or ADC"/>
+        </div>
+      </div>
+      <div class="field">
+        <span class="label" id="t-vertex-base-url">Custom Base URL (Optional)</span>
+        <input id="vertex-base-url" class="input" placeholder="e.g. https://us-central1-aiplatform.googleapis.com"/>
+      </div>
+      <div class="field">
+        <span class="label" id="t-vertex-sa-json">Service Account JSON (Optional)</span>
+        <textarea id="vertex-sa-json" class="textarea" placeholder="Paste the complete contents of your service-account.json here (or leave empty to use system ADC)..." style="min-height:100px"></textarea>
+      </div>
+      <div class="row">
+        <button class="btn btn-primary" id="add-vertex-btn">Add Vertex AI Credential</button>
+        <span id="vertex-meta" style="color:var(--text3);font-size:13px"></span>
       </div>
     </div>
   </div>
@@ -740,6 +786,7 @@ const I = {
     epLogin: 'Start OAuth login flow.',
     epLoginStatus: 'Check login status.',
     epLoginComplete: 'Complete OAuth with callback URL.',
+    epVertex: 'Add a Vertex AI credential (project, location, SA key, etc.).',
     epQuotas: 'Get quotas for all credentials.',
     epQuota: 'Get quota for a specific credential.',
     epHealth: 'Health check.',
@@ -759,6 +806,24 @@ const I = {
     logsStreamOn: 'Live',
     logsStreamOff: 'Disconnected',
     logsCounter: 'showing',
+    tabGoogleOAuth: 'Google OAuth',
+    tabVertexAI: 'Vertex AI',
+    addVertexTitle: 'Add Vertex AI Credential',
+    addVertexDesc: 'Add a Google Cloud Vertex AI credential using a Service Account or API key.',
+    vertexCredLabel: 'Credential Label',
+    vertexCredLabelPh: 'e.g. GCP Production',
+    vertexProject: 'GCP Project ID',
+    vertexProjectPh: 'e.g. my-project-12345',
+    vertexLocation: 'Location / Region',
+    vertexLocationPh: 'e.g. us-central1',
+    vertexSaKey: 'Service Account JSON (Optional)',
+    vertexSaKeyPh: 'Paste service account key.json contents here (or leave empty for system ADC)...',
+    vertexApiKey: 'Vertex API Key (Optional)',
+    vertexApiKeyPh: 'Leave empty if using Service Account or ADC',
+    vertexBaseUrl: 'Custom Base URL (Optional)',
+    vertexBaseUrlPh: 'e.g. https://us-central1-aiplatform.googleapis.com',
+    addVertexBtn: 'Add Vertex AI Credential',
+    vertexAdded: 'Vertex AI credential added successfully.',
     footerLicense1: '<strong>License:</strong> Upstream Gemini CLI code remains Apache-2.0.',
     footerLicense2: 'gemini-api2cli-specific files in this fork are marked under CNC-1.0. See LICENSING.md for the current scope.',
   },
@@ -912,6 +977,7 @@ const I = {
     epLogin: '发起 OAuth 登录流程。',
     epLoginStatus: '查看登录状态。',
     epLoginComplete: '用回调 URL 完成 OAuth 登录。',
+    epVertex: '添加 Vertex AI 凭据（包含项目 ID、区域、服务账号密钥等）。',
     epQuotas: '获取所有凭据的额度。',
     epQuota: '获取指定凭据的额度。',
     epHealth: '健康检查。',
@@ -931,6 +997,24 @@ const I = {
     logsStreamOn: '实时',
     logsStreamOff: '未连接',
     logsCounter: '条',
+    tabGoogleOAuth: 'Google OAuth',
+    tabVertexAI: 'Vertex AI',
+    addVertexTitle: '添加 Vertex AI 凭据',
+    addVertexDesc: '通过 Service Account 密钥或 API Key 添加 Google Cloud Vertex AI 凭据。',
+    vertexCredLabel: '凭据名称',
+    vertexCredLabelPh: '例如：GCP 生产环境',
+    vertexProject: 'GCP 项目 ID',
+    vertexProjectPh: '例如：my-project-12345',
+    vertexLocation: '所在区域 (Location / Region)',
+    vertexLocationPh: '例如：us-central1',
+    vertexSaKey: 'Service Account 密钥 JSON (可选)',
+    vertexSaKeyPh: '在此粘贴服务账号 key.json 完整内容 (若使用系统默认 ADC 可留空)...',
+    vertexApiKey: 'Vertex API Key (可选)',
+    vertexApiKeyPh: '若使用服务账号或本地 ADC 凭据请留空',
+    vertexBaseUrl: '自定义 Base URL (可选)',
+    vertexBaseUrlPh: '例如：https://us-central1-aiplatform.googleapis.com',
+    addVertexBtn: '添加 Vertex AI 凭据',
+    vertexAdded: 'Vertex AI 凭据添加成功。',
     footerLicense1: '<strong>许可说明：</strong>上游 Gemini CLI 代码仍然保持 Apache-2.0。',
     footerLicense2: '这个 fork 中新增的 gemini-api2cli 特定文件标记为 CNC-1.0。当前适用范围请查看 LICENSING.md。',
   },
@@ -949,6 +1033,11 @@ function applyLang() {
   // Header
   $('refresh-all-btn').textContent = t('refreshAll');
   $('logout-btn').textContent = t('signOut');
+  // Tabs
+  const tabOauthEl = $('tab-btn-oauth');
+  if (tabOauthEl) tabOauthEl.textContent = t('tabGoogleOAuth');
+  const tabVertexEl = $('tab-btn-vertex');
+  if (tabVertexEl) tabVertexEl.textContent = t('tabVertexAI');
   // Start Login
   $('t-start-login').textContent = t('startLogin');
   $('t-start-login-desc').textContent = t('startLoginDesc');
@@ -967,6 +1056,37 @@ function applyLang() {
   $('callback-url').placeholder = t('callbackUrlPh');
   $('complete-login-btn').textContent = t('completeLogin');
   $('check-status-btn').textContent = t('checkStatus');
+  // Vertex AI Form
+  const vTitle = $('t-add-vertex-title');
+  if (vTitle) vTitle.textContent = t('addVertexTitle');
+  const vDesc = $('t-add-vertex-desc');
+  if (vDesc) vDesc.textContent = t('addVertexDesc');
+  const vLabel = $('t-vertex-cred-label');
+  if (vLabel) vLabel.textContent = t('vertexCredLabel');
+  const vLabelInput = $('vertex-label');
+  if (vLabelInput) vLabelInput.placeholder = t('vertexCredLabelPh');
+  const vProj = $('t-vertex-project');
+  if (vProj) vProj.textContent = t('vertexProject');
+  const vProjInput = $('vertex-project');
+  if (vProjInput) vProjInput.placeholder = t('vertexProjectPh');
+  const vLoc = $('t-vertex-location');
+  if (vLoc) vLoc.textContent = t('vertexLocation');
+  const vLocInput = $('vertex-location');
+  if (vLocInput) vLocInput.placeholder = t('vertexLocationPh');
+  const vKey = $('t-vertex-api-key');
+  if (vKey) vKey.textContent = t('vertexApiKey');
+  const vKeyInput = $('vertex-api-key');
+  if (vKeyInput) vKeyInput.placeholder = t('vertexApiKeyPh');
+  const vBase = $('t-vertex-base-url');
+  if (vBase) vBase.textContent = t('vertexBaseUrl');
+  const vBaseInput = $('vertex-base-url');
+  if (vBaseInput) vBaseInput.placeholder = t('vertexBaseUrlPh');
+  const vSa = $('t-vertex-sa-json');
+  if (vSa) vSa.textContent = t('vertexSaKey');
+  const vSaInput = $('vertex-sa-json');
+  if (vSaInput) vSaInput.placeholder = t('vertexSaKeyPh');
+  const vBtn = $('add-vertex-btn');
+  if (vBtn) vBtn.textContent = t('addVertexBtn');
   // Credentials
   $('t-credentials').textContent = t('credentials');
   $('t-cred-desc').textContent = t('credDesc');
@@ -1288,15 +1408,33 @@ function renderCreds(payload) {
     return;
   }
   $('cred-list').innerHTML = S.credentials.map(c => {
+    const isVertex = c.type === 'vertex-ai';
+    const typeBadge = isVertex
+      ? '<span class="badge" style="background:#0284c7;color:#fff;margin-right:4px">Vertex AI</span>'
+      : '<span class="badge" style="background:var(--bg3);color:var(--text2);margin-right:4px">OAuth</span>';
     const badge = c.isCurrent
       ? '<span class="badge badge-active">'+esc(t('active'))+'</span>'
       : '<span class="badge badge-stored">'+esc(t('stored'))+'</span>';
+
+    let subtitle = '';
+    if (isVertex) {
+      const parts = [];
+      if (c.project) parts.push('Project: ' + esc(c.project));
+      if (c.location) parts.push('Region: ' + esc(c.location));
+      if (c.hasServiceAccount) parts.push('[SA Key]');
+      if (c.hasApiKey) parts.push('[API Key]');
+      if (c.baseUrl) parts.push('Custom URL');
+      subtitle = parts.join(' | ') || 'Vertex AI';
+    } else {
+      subtitle = c.email ? esc(c.email) : esc(t('notLoggedIn'));
+    }
+
     return '<div class="cred-card'+(c.isCurrent?' active':'')+'">'+
       '<div style="display:flex;justify-content:space-between;align-items:flex-start">'+
         '<div><div class="cred-name">'+esc(c.label)+'</div>'+
-        '<div class="cred-email">'+(c.email?esc(c.email):esc(t('notLoggedIn')))+'</div>'+
+        '<div class="cred-email">'+subtitle+'</div>'+
         '<div class="cred-id">'+esc(c.id)+'</div></div>'+
-        badge+
+        '<div style="display:flex;align-items:center;gap:4px">'+typeBadge+badge+'</div>'+
       '</div>'+
       renderCredCooldowns(c.cooldowns)+
       '<div class="cred-actions">'+
@@ -1320,6 +1458,29 @@ function renderQuotas(payload) {
     return;
   }
   $('quota-list').innerHTML = quotas.map(e => {
+    if (e.credential?.type === 'vertex-ai') {
+      const statusBadge = e.status === 'ok'
+        ? '<span class="badge badge-active">'+esc(t('statusOk'))+'</span>'
+        : '<span class="badge badge-stored">'+esc(localeStatus(e.status))+'</span>';
+      const credDesc = 'Vertex AI | Project: ' + (e.credential.project || '--') + ' | Region: ' + (e.credential.location || '--');
+      const authMode = e.credential.hasServiceAccount ? 'Service Account' : (e.credential.hasApiKey ? 'API Key' : 'ADC');
+      return '<div class="quota-card">'+
+        '<div style="display:flex;justify-content:space-between;align-items:flex-start">'+
+          '<div><strong>'+esc(e.credential.label)+'</strong>'+
+          '<div style="color:var(--text3);font-size:12px">'+esc(credDesc)+'</div></div>'+
+          statusBadge+
+        '</div>'+
+        '<div class="metric-grid" style="margin-top:8px">'+
+          metric('Auth Type', 'Vertex AI')+
+          metric('Project', e.credential.project || '--')+
+          metric('Region', e.credential.location || '--')+
+          metric('Auth Mode', authMode)+
+          metric('Quota / Billing', 'GCP Console')+
+          metric('Status', 'Active')+
+        '</div>'+
+        (e.error?'<div style="margin-top:8px;color:var(--red);font-size:12px">'+esc(e.error)+'</div>':'')+
+      '</div>';
+    }
     const tot = e.quotaSummary?.totals || {};
     const models = e.quotaSummary?.models || [];
     const plan = e.userTierName || e.userTier || '--';
@@ -1449,6 +1610,7 @@ function renderEndpoints() {
     ['POST','/v1/credentials/login',t('epLogin')],
     ['GET','/v1/credentials/login/:id',t('epLoginStatus')],
     ['POST','/v1/credentials/login/:id/complete',t('epLoginComplete')],
+    ['POST','/v1/credentials/vertex',t('epVertex')],
     ['GET','/v1/quotas',t('epQuotas')],
     ['GET','/v1/quotas/:credentialId',t('epQuota')],
     ['GET','/v1/health',t('epHealth')],
@@ -1548,6 +1710,77 @@ $('check-status-btn').onclick = async () => {
     $('login-output').style.display = 'block';
     $('login-output').textContent = JSON.stringify(p, null, 2);
   } catch(e) { showErr(e); }
+};
+
+$('tab-btn-oauth').onclick = () => {
+  $('tab-btn-oauth').className = 'btn btn-primary btn-sm';
+  $('tab-btn-vertex').className = 'btn btn-outline btn-sm';
+  $('cred-add-oauth').style.display = '';
+  $('cred-add-vertex').style.display = 'none';
+};
+
+$('tab-btn-vertex').onclick = () => {
+  $('tab-btn-vertex').className = 'btn btn-primary btn-sm';
+  $('tab-btn-oauth').className = 'btn btn-outline btn-sm';
+  $('cred-add-oauth').style.display = 'none';
+  $('cred-add-vertex').style.display = 'block';
+};
+
+$('add-vertex-btn').onclick = async () => {
+  const btn = $('add-vertex-btn');
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = '<span style="display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:4px"></span>' + t('startingLogin');
+  try {
+    setNotice('');
+    const label = $('vertex-label').value.trim() || undefined;
+    const project = $('vertex-project').value.trim();
+    const location = $('vertex-location').value.trim();
+    const apiKey = $('vertex-api-key').value.trim() || undefined;
+    const baseUrl = $('vertex-base-url').value.trim() || undefined;
+    const saRaw = $('vertex-sa-json').value.trim();
+
+    if (!apiKey && (!project || !location)) {
+      throw new Error('Either GCP Project ID and Location OR Vertex API Key are required.');
+    }
+
+    let serviceAccountJson;
+    if (saRaw) {
+      try {
+        JSON.parse(saRaw);
+        serviceAccountJson = saRaw;
+      } catch {
+        throw new Error('Service Account JSON is not valid JSON.');
+      }
+    }
+
+    await api('/v1/credentials/vertex', {
+      method: 'POST',
+      body: JSON.stringify({
+        label,
+        project: project || undefined,
+        location: location || undefined,
+        apiKey,
+        baseUrl,
+        serviceAccountJson,
+      }),
+    });
+
+    $('vertex-meta').textContent = t('vertexAdded');
+    $('vertex-label').value = '';
+    $('vertex-project').value = '';
+    $('vertex-location').value = 'us-central1';
+    $('vertex-api-key').value = '';
+    $('vertex-base-url').value = '';
+    $('vertex-sa-json').value = '';
+    setTimeout(() => { $('vertex-meta').textContent = ''; }, 4000);
+    await refreshAll();
+  } catch(e) {
+    showErr(e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
 };
 
 $('save-model-btn').onclick = async () => {
