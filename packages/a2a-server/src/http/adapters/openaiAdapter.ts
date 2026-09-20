@@ -8,9 +8,34 @@ import type {
   FormatAdapter,
   NormalizedPromptRequest,
   OpenAIRequestBody,
+  OpenAIResponse,
+  OpenAIStreamResponse,
+  OpenAIUsage,
+  UsageInfo,
 } from './types.js';
 
 class BadRequestError extends Error {}
+
+function buildOpenAiUsage(usage?: UsageInfo): OpenAIUsage {
+  const promptTokens = usage?.inputTokens ?? 0;
+  const completionTokens = usage?.outputTokens ?? 0;
+  const totalTokens = usage?.totalTokens ?? promptTokens + completionTokens;
+  const cachedTokens = usage?.cachedReadTokens ?? undefined;
+  const thoughtTokens = usage?.thoughtTokens ?? undefined;
+
+  const usageObj: OpenAIUsage = {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: totalTokens,
+  };
+  if (cachedTokens !== undefined && cachedTokens > 0) {
+    usageObj.prompt_tokens_details = { cached_tokens: cachedTokens };
+  }
+  if (thoughtTokens !== undefined && thoughtTokens > 0) {
+    usageObj.completion_tokens_details = { reasoning_tokens: thoughtTokens };
+  }
+  return usageObj;
+}
 
 type MessageEntry = { role: string; content: string };
 
@@ -127,7 +152,8 @@ export class OpenAIAdapter implements FormatAdapter {
     assistantText: string,
     model: string,
     requestId: string,
-  ): unknown {
+    usage?: UsageInfo,
+  ): OpenAIResponse {
     return {
       id: requestId,
       object: 'chat.completion',
@@ -140,11 +166,7 @@ export class OpenAIAdapter implements FormatAdapter {
           finish_reason: 'stop',
         },
       ],
-      usage: {
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        total_tokens: 0,
-      },
+      usage: buildOpenAiUsage(usage),
     };
   }
 
@@ -189,8 +211,8 @@ export class OpenAIAdapter implements FormatAdapter {
     return `data: ${JSON.stringify(chunk)}\n\n`;
   }
 
-  formatStreamEnd(model: string, requestId: string): string {
-    const chunk = {
+  formatStreamEnd(model: string, requestId: string, usage?: UsageInfo): string {
+    const chunk: OpenAIStreamResponse = {
       id: requestId,
       object: 'chat.completion.chunk',
       created: Math.floor(Date.now() / 1000),
@@ -202,6 +224,7 @@ export class OpenAIAdapter implements FormatAdapter {
           finish_reason: 'stop',
         },
       ],
+      usage: buildOpenAiUsage(usage),
     };
     return `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`;
   }

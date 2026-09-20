@@ -249,6 +249,63 @@ describe('Session', () => {
     expect(result).toMatchObject({ stopReason: 'end_turn' });
   });
 
+  it('should capture and return usage with cached tokens in PromptResponse', async () => {
+    async function* createUsageStream(): AsyncGenerator<ServerGeminiStreamEvent> {
+      yield {
+        type: GeminiEventType.Content,
+        value: 'Response with cache hit',
+      };
+      yield {
+        type: GeminiEventType.Finished,
+        value: {
+          reason: FinishReason.STOP,
+          usageMetadata: {
+            promptTokenCount: 1500,
+            candidatesTokenCount: 120,
+            totalTokenCount: 1620,
+            cachedContentTokenCount: 1200,
+            thoughtsTokenCount: 50,
+          },
+        },
+      };
+    }
+    mockSendMessageStream.mockReturnValue(createUsageStream());
+
+    const result = await session.prompt({
+      sessionId: 'session-1',
+      prompt: [{ type: 'text', text: 'Analyze this codebase' }],
+    });
+
+    expect(result.usage).toEqual({
+      inputTokens: 1500,
+      outputTokens: 120,
+      totalTokens: 1620,
+      cachedReadTokens: 1200,
+      thoughtTokens: 50,
+    });
+    const meta = result._meta as
+      | {
+          quota?: {
+            token_count?: {
+              input_tokens?: number;
+              output_tokens?: number;
+              cached_tokens?: number;
+            };
+          };
+          usageMetadata?: Record<string, unknown>;
+        }
+      | undefined;
+    expect(meta?.['quota']?.['token_count']).toEqual({
+      input_tokens: 1500,
+      output_tokens: 120,
+      cached_tokens: 1200,
+    });
+    expect(meta?.['usageMetadata']).toMatchObject({
+      promptTokenCount: 1500,
+      cachedContentTokenCount: 1200,
+    });
+  });
+
   it('should pass current session information directly onto geminiClient.sendMessageStream', async () => {
     const stream = createMockStream([
       {

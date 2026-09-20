@@ -52,7 +52,8 @@ import {
   isOpenApiEnabled,
   setOpenApiEnabled,
 } from './promptApiAuth.js';
-import type { FormatAdapter } from './adapters/types.js';
+import type * as acp from '@agentclientprotocol/sdk';
+import type { FormatAdapter, UsageInfo } from './adapters/types.js';
 import { geminiAdapter } from './adapters/geminiAdapter.js';
 import { openaiAdapter } from './adapters/openaiAdapter.js';
 import { logBuffer, type LogEntry } from './logBuffer.js';
@@ -2049,6 +2050,61 @@ function extractErrorMessage(err: unknown): string {
   return String(err);
 }
 
+function extractUsageInfo(
+  response?: acp.PromptResponse,
+): UsageInfo | undefined {
+  if (!response) return undefined;
+  const usage = response.usage;
+  const meta = response._meta;
+  let quota:
+    | {
+        token_count?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          cached_tokens?: number;
+        };
+      }
+    | undefined;
+  let rawUsageMetadata: Record<string, unknown> | undefined;
+
+  if (meta && typeof meta === 'object') {
+    const metaRecord = meta as Record<string, unknown>;
+    const rawQuota = metaRecord['quota'];
+    if (rawQuota && typeof rawQuota === 'object') {
+      quota = rawQuota as {
+        token_count?: {
+          input_tokens?: number;
+          output_tokens?: number;
+          cached_tokens?: number;
+        };
+      };
+    }
+    const rawUsage = metaRecord['usageMetadata'];
+    if (rawUsage && typeof rawUsage === 'object') {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      rawUsageMetadata = rawUsage as Record<string, unknown>;
+    }
+  }
+
+  const inputTokens =
+    usage?.inputTokens ?? quota?.token_count?.input_tokens ?? 0;
+  const outputTokens =
+    usage?.outputTokens ?? quota?.token_count?.output_tokens ?? 0;
+  const totalTokens = usage?.totalTokens ?? inputTokens + outputTokens;
+  const cachedReadTokens =
+    usage?.cachedReadTokens ?? quota?.token_count?.cached_tokens ?? null;
+  const thoughtTokens = usage?.thoughtTokens ?? null;
+
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    cachedReadTokens,
+    thoughtTokens,
+    rawUsageMetadata,
+  };
+}
+
 /* ── Credential prefetch (failover latency optimization) ── */
 
 type PrefetchedSession = {
@@ -2313,7 +2369,7 @@ async function handleAcpJsonRequest(
 
       try {
         let assistantText = '';
-        await worker.prompt(
+        const promptResponse = await worker.prompt(
           sessionId,
           contentBlocks,
           (update: SessionNotification) => {
@@ -2328,9 +2384,17 @@ async function handleAcpJsonRequest(
           },
         );
 
+        const usageInfo = extractUsageInfo(promptResponse);
         return res
           .status(200)
-          .json(adapter.buildJsonResponse(assistantText, model, requestId));
+          .json(
+            adapter.buildJsonResponse(
+              assistantText,
+              model,
+              requestId,
+              usageInfo,
+            ),
+          );
       } catch (err) {
         lastError = extractErrorMessage(err);
         logger.error(
@@ -2534,7 +2598,7 @@ async function handleAcpStreamingRequest(
       res.on('close', abortHandler);
 
       try {
-        await worker.prompt(
+        const promptResponse = await worker.prompt(
           sessionId,
           contentBlocks,
           (update: SessionNotification) => {
@@ -2557,7 +2621,8 @@ async function handleAcpStreamingRequest(
         );
 
         if (!cancelled) {
-          res.write(adapter.formatStreamEnd(model, requestId));
+          const usageInfo = extractUsageInfo(promptResponse);
+          res.write(adapter.formatStreamEnd(model, requestId, usageInfo));
         }
         // Success — clean up and return
         req.off('aborted', abortHandler);

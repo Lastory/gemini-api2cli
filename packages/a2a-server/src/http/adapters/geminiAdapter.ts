@@ -10,9 +10,33 @@ import type {
   GeminiPart,
   GeminiContent,
   GeminiRequestBody,
+  GeminiResponse,
+  UsageInfo,
 } from './types.js';
 
 class BadRequestError extends Error {}
+
+function buildGeminiUsageMetadata(
+  usage?: UsageInfo,
+): GeminiResponse['usageMetadata'] | undefined {
+  if (!usage) return undefined;
+  const promptTokenCount = usage.inputTokens;
+  const candidatesTokenCount = usage.outputTokens;
+  const totalTokenCount =
+    usage.totalTokens || promptTokenCount + candidatesTokenCount;
+  const metadata: NonNullable<GeminiResponse['usageMetadata']> = {
+    promptTokenCount,
+    candidatesTokenCount,
+    totalTokenCount,
+  };
+  if (usage.cachedReadTokens != null && usage.cachedReadTokens > 0) {
+    metadata.cachedContentTokenCount = usage.cachedReadTokens;
+  }
+  if (usage.thoughtTokens != null && usage.thoughtTokens > 0) {
+    metadata.thoughtsTokenCount = usage.thoughtTokens;
+  }
+  return metadata;
+}
 
 function isGeminiPart(p: unknown): p is GeminiPart {
   if (typeof p !== 'object' || p === null) return false;
@@ -145,8 +169,9 @@ export class GeminiAdapter implements FormatAdapter {
     assistantText: string,
     model: string,
     _requestId: string,
-  ): unknown {
-    return {
+    usage?: UsageInfo,
+  ): GeminiResponse {
+    const res: GeminiResponse = {
       candidates: [
         {
           content: {
@@ -158,6 +183,11 @@ export class GeminiAdapter implements FormatAdapter {
       ],
       modelVersion: model,
     };
+    const usageMetadata = buildGeminiUsageMetadata(usage);
+    if (usageMetadata) {
+      res.usageMetadata = usageMetadata;
+    }
+    return res;
   }
 
   buildJsonError(
@@ -195,8 +225,19 @@ export class GeminiAdapter implements FormatAdapter {
     return `data: ${JSON.stringify(chunk)}\n\n`;
   }
 
-  formatStreamEnd(model: string, _requestId: string): string {
-    const chunk = {
+  formatStreamEnd(
+    model: string,
+    _requestId: string,
+    usage?: UsageInfo,
+  ): string {
+    const chunk: {
+      candidates: Array<{
+        content: { parts: Array<{ text: string }>; role: string };
+        finishReason: string;
+      }>;
+      modelVersion: string;
+      usageMetadata?: GeminiResponse['usageMetadata'];
+    } = {
       candidates: [
         {
           content: { parts: [{ text: '' }], role: 'model' },
@@ -205,6 +246,10 @@ export class GeminiAdapter implements FormatAdapter {
       ],
       modelVersion: model,
     };
+    const usageMetadata = buildGeminiUsageMetadata(usage);
+    if (usageMetadata) {
+      chunk.usageMetadata = usageMetadata;
+    }
     return `data: ${JSON.stringify(chunk)}\n\n`;
   }
 

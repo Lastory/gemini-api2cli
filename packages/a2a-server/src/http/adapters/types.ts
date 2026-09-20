@@ -19,6 +19,15 @@ export type StreamJsonEvent = {
   [key: string]: unknown;
 };
 
+export type UsageInfo = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cachedReadTokens?: number | null;
+  thoughtTokens?: number | null;
+  rawUsageMetadata?: Record<string, unknown>;
+};
+
 /* ── Format Adapter interface ── */
 
 export interface FormatAdapter {
@@ -36,6 +45,7 @@ export interface FormatAdapter {
     assistantText: string,
     model: string,
     requestId: string,
+    usage?: UsageInfo,
   ): unknown;
 
   /** Build the full JSON error response. */
@@ -55,7 +65,7 @@ export interface FormatAdapter {
   ): string;
 
   /** Format the final streaming message (finish signal). */
-  formatStreamEnd(model: string, requestId: string): string;
+  formatStreamEnd(model: string, requestId: string, usage?: UsageInfo): string;
 
   /** Format a streaming error event. */
   formatStreamError(message: string, model: string, requestId: string): string;
@@ -92,6 +102,8 @@ export type GeminiResponse = {
     promptTokenCount: number;
     candidatesTokenCount: number;
     totalTokenCount: number;
+    cachedContentTokenCount?: number;
+    thoughtsTokenCount?: number;
   };
 };
 
@@ -122,17 +134,25 @@ export type OpenAIStreamChoice = {
   finish_reason: string | null;
 };
 
+export type OpenAIUsage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+  };
+  completion_tokens_details?: {
+    reasoning_tokens?: number;
+  };
+};
+
 export type OpenAIResponse = {
   id: string;
   object: string;
   created: number;
   model: string;
   choices: OpenAIChoice[];
-  usage: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
+  usage: OpenAIUsage;
 };
 
 export type OpenAIStreamResponse = {
@@ -141,4 +161,5 @@ export type OpenAIStreamResponse = {
   created: number;
   model: string;
   choices: OpenAIStreamChoice[];
+  usage?: OpenAIUsage;
 };
