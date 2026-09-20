@@ -2150,6 +2150,7 @@ function renderAcpPrompt(p, nowMs) {
   const tokenChips = [];
   if (typeof p.inputTokens === 'number') tokenChips.push('<span>in ' + p.inputTokens + '</span>');
   if (typeof p.outputTokens === 'number') tokenChips.push('<span>out ' + p.outputTokens + '</span>');
+  if (typeof p.thoughtTokens === 'number' && p.thoughtTokens > 0) tokenChips.push('<span>thought ' + p.thoughtTokens + '</span>');
   if (typeof p.totalTokens === 'number') tokenChips.push('<span>tot ' + p.totalTokens + '</span>');
   if (typeof p.cachedTokens === 'number' && p.cachedTokens > 0) tokenChips.push('<span>cached ' + p.cachedTokens + '</span>');
 

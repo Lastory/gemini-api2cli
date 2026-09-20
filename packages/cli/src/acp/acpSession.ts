@@ -475,6 +475,16 @@ export class Session {
                 turnThoughtTokens =
                   usage.thoughtsTokenCount ?? turnThoughtTokens;
                 turnTotalTokens = usage.totalTokenCount ?? turnTotalTokens;
+
+                if (turnCachedTokens === 0 && usage.cacheTokensDetails) {
+                  const detailsSum = usage.cacheTokensDetails.reduce(
+                    (acc, item) => acc + (item.tokenCount ?? 0),
+                    0,
+                  );
+                  if (detailsSum > 0) {
+                    turnCachedTokens = detailsSum;
+                  }
+                }
               }
               break;
             }
