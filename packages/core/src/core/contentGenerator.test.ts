@@ -483,6 +483,36 @@ describe('createContentGenerator', () => {
     );
   });
 
+  it('should pass Vertex AI routing headers when configured via environment variables', async () => {
+    vi.stubEnv('VERTEX_AI_SHARED_REQUEST_TYPE', 'flex');
+    vi.stubEnv('VERTEX_AI_REQUEST_TYPE', 'shared');
+
+    const mockGenerator = {
+      models: {},
+    } as unknown as GoogleGenAI;
+    vi.mocked(GoogleGenAI).mockImplementation(() => mockGenerator as never);
+
+    await createContentGenerator(
+      {
+        apiKey: 'test-api-key',
+        vertexai: true,
+        authType: AuthType.USE_VERTEX_AI,
+      },
+      mockConfig,
+    );
+
+    expect(GoogleGenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpOptions: expect.objectContaining({
+          headers: expect.objectContaining({
+            'X-Vertex-AI-LLM-Request-Type': 'shared',
+            'X-Vertex-AI-LLM-Shared-Request-Type': 'flex',
+          }),
+        }),
+      }),
+    );
+  });
+
   it('should inject HttpsProxyAgent into googleAuthOptions when proxy URL uses https://', async () => {
     const mockConfigWithProxy = {
       getModel: vi.fn().mockReturnValue('gemini-pro'),
@@ -1395,6 +1425,22 @@ describe('createContentGeneratorConfig', () => {
     );
 
     expect(config.vertexAiRouting).toEqual(vertexAiRouting);
+  });
+
+  it('should fallback to VERTEX_AI_SHARED_REQUEST_TYPE and VERTEX_AI_REQUEST_TYPE env vars if not passed', async () => {
+    vi.stubEnv('GOOGLE_API_KEY', 'env-google-key');
+    vi.stubEnv('VERTEX_AI_SHARED_REQUEST_TYPE', 'flex');
+    vi.stubEnv('VERTEX_AI_REQUEST_TYPE', 'shared');
+
+    const config = await createContentGeneratorConfig(
+      mockConfig,
+      AuthType.USE_VERTEX_AI,
+    );
+
+    expect(config.vertexAiRouting).toEqual({
+      requestType: 'shared',
+      sharedRequestType: 'flex',
+    });
   });
 
   it('should configure for Vertex AI using GCP project and location when set', async () => {

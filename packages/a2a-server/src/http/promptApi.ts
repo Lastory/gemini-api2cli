@@ -640,6 +640,7 @@ function getPromptApiCredentialPayload(
       : {}),
     ...(credential.apiKey ? { hasApiKey: true } : {}),
     ...(credential.baseUrl ? { baseUrl: credential.baseUrl } : {}),
+    ...(credential.serviceTier ? { serviceTier: credential.serviceTier } : {}),
     isCurrent: credential.id === currentCredentialId,
     // Empty array (not undefined) so the UI can rely on `.length`
     // without an extra null check on every render.
@@ -3893,6 +3894,7 @@ export function createPromptApiRouter(
       const rawLabel = b['label'];
       const rawBaseUrl = b['baseUrl'];
       const rawServiceAccountJson = b['serviceAccountJson'];
+      const rawServiceTier = b['serviceTier'];
 
       const project = typeof rawProject === 'string' ? rawProject.trim() : '';
       const location =
@@ -3903,6 +3905,26 @@ export function createPromptApiRouter(
       const baseUrl =
         typeof rawBaseUrl === 'string' ? rawBaseUrl.trim() : undefined;
       let serviceAccountJson: string | undefined;
+      let serviceTier: 'standard' | 'flex' | 'priority' | undefined;
+
+      if (rawServiceTier !== undefined && rawServiceTier !== null) {
+        if (typeof rawServiceTier !== 'string') {
+          throw new BadRequestError(
+            '"serviceTier" must be a string ("standard", "flex", or "priority").',
+          );
+        }
+        const normalizedTier = rawServiceTier.trim().toLowerCase();
+        if (
+          normalizedTier !== 'standard' &&
+          normalizedTier !== 'flex' &&
+          normalizedTier !== 'priority'
+        ) {
+          throw new BadRequestError(
+            'Invalid "serviceTier". Allowed values are "standard", "flex", or "priority".',
+          );
+        }
+        serviceTier = normalizedTier;
+      }
 
       if (rawServiceAccountJson !== undefined) {
         if (
@@ -3938,6 +3960,7 @@ export function createPromptApiRouter(
         serviceAccountJson,
         apiKey,
         baseUrl,
+        serviceTier,
       });
 
       const currentCredentialId =

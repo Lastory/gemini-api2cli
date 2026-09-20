@@ -137,12 +137,34 @@ export async function createContentGeneratorConfig(
   customHeaders?: Record<string, string>,
   vertexAiRouting?: VertexAiRoutingConfig,
 ): Promise<ContentGeneratorConfig> {
+  let resolvedVertexAiRouting = vertexAiRouting;
+  const envSharedType = process.env['VERTEX_AI_SHARED_REQUEST_TYPE'];
+  if (
+    !resolvedVertexAiRouting?.sharedRequestType &&
+    (envSharedType === 'flex' || envSharedType === 'priority')
+  ) {
+    resolvedVertexAiRouting = {
+      ...resolvedVertexAiRouting,
+      sharedRequestType: envSharedType,
+    };
+  }
+  const envReqType = process.env['VERTEX_AI_REQUEST_TYPE'];
+  if (
+    !resolvedVertexAiRouting?.requestType &&
+    (envReqType === 'dedicated' || envReqType === 'shared')
+  ) {
+    resolvedVertexAiRouting = {
+      ...resolvedVertexAiRouting,
+      requestType: envReqType,
+    };
+  }
+
   const contentGeneratorConfig: ContentGeneratorConfig = {
     authType,
     proxy: config?.getProxy(),
     baseUrl,
     customHeaders,
-    vertexAiRouting,
+    vertexAiRouting: resolvedVertexAiRouting,
   };
 
   // If we are using Google auth or we are in Cloud Shell, there is nothing else to validate for now.
@@ -306,11 +328,29 @@ export async function createContentGenerator(
       if (config.customHeaders) {
         headers = { ...headers, ...config.customHeaders };
       }
+      let vertexAiRouting = config.vertexAiRouting;
+      const envSharedType = process.env['VERTEX_AI_SHARED_REQUEST_TYPE'];
       if (
-        config.authType === AuthType.USE_VERTEX_AI &&
-        config.vertexAiRouting
+        !vertexAiRouting?.sharedRequestType &&
+        (envSharedType === 'flex' || envSharedType === 'priority')
       ) {
-        const { requestType, sharedRequestType } = config.vertexAiRouting;
+        vertexAiRouting = {
+          ...vertexAiRouting,
+          sharedRequestType: envSharedType,
+        };
+      }
+      const envReqType = process.env['VERTEX_AI_REQUEST_TYPE'];
+      if (
+        !vertexAiRouting?.requestType &&
+        (envReqType === 'dedicated' || envReqType === 'shared')
+      ) {
+        vertexAiRouting = {
+          ...vertexAiRouting,
+          requestType: envReqType,
+        };
+      }
+      if (config.authType === AuthType.USE_VERTEX_AI && vertexAiRouting) {
+        const { requestType, sharedRequestType } = vertexAiRouting;
         headers = {
           ...headers,
           ...(requestType

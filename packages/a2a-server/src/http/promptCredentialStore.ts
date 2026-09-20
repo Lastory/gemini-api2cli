@@ -31,6 +31,7 @@ export type PromptApiCredentialRecord = {
   hasServiceAccount?: boolean;
   apiKey?: string;
   baseUrl?: string;
+  serviceTier?: 'standard' | 'flex' | 'priority';
 };
 
 export interface CreateVertexCredentialParams {
@@ -41,6 +42,7 @@ export interface CreateVertexCredentialParams {
   serviceAccountJson?: string;
   apiKey?: string;
   baseUrl?: string;
+  serviceTier?: 'standard' | 'flex' | 'priority';
 }
 
 const SAFE_CREDENTIAL_ID_RE = /^[a-zA-Z0-9_-]+$/;
@@ -153,6 +155,7 @@ export class PromptCredentialStore {
       hasServiceAccount,
       ...(params.apiKey?.trim() ? { apiKey: params.apiKey.trim() } : {}),
       ...(params.baseUrl?.trim() ? { baseUrl: params.baseUrl.trim() } : {}),
+      ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
     };
 
     const credentialDir = this.getCredentialDir(id);

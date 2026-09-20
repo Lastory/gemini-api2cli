@@ -189,6 +189,14 @@ export function buildAcpChildEnv(
     if (credentialRecord.baseUrl) {
       env['GOOGLE_VERTEX_BASE_URL'] = credentialRecord.baseUrl;
     }
+    if (
+      credentialRecord.serviceTier &&
+      credentialRecord.serviceTier !== 'standard'
+    ) {
+      env['VERTEX_AI_SHARED_REQUEST_TYPE'] = credentialRecord.serviceTier;
+    } else {
+      delete env['VERTEX_AI_SHARED_REQUEST_TYPE'];
+    }
     const saPath = path.join(isolatedHomeDir, 'service-account.json');
     if (existsSync(saPath)) {
       env['GOOGLE_APPLICATION_CREDENTIALS'] = saPath;
@@ -202,6 +210,7 @@ export function buildAcpChildEnv(
     delete env['GOOGLE_APPLICATION_CREDENTIALS'];
     delete env['GOOGLE_API_KEY'];
     delete env['GOOGLE_VERTEX_BASE_URL'];
+    delete env['VERTEX_AI_SHARED_REQUEST_TYPE'];
   }
 
   if (!settings.mcpEnabled) {

@@ -379,6 +379,14 @@ a{color:var(--accent);text-decoration:none}
         <input id="vertex-base-url" class="input" placeholder="e.g. https://us-central1-aiplatform.googleapis.com"/>
       </div>
       <div class="field">
+        <span class="label" id="t-vertex-service-tier">Service Tier (Latency & Cost)</span>
+        <select id="vertex-service-tier" class="input">
+          <option id="opt-tier-standard" value="standard">Standard (Default — standard price & latency)</option>
+          <option id="opt-tier-flex" value="flex">Flex (Cost-optimized — 50% discount, sheddable)</option>
+          <option id="opt-tier-priority" value="priority">Priority (Latency-optimized — non-sheddable premium)</option>
+        </select>
+      </div>
+      <div class="field">
         <span class="label" id="t-vertex-sa-json">Service Account JSON (Optional)</span>
         <textarea id="vertex-sa-json" class="textarea" placeholder="Paste the complete contents of your service-account.json here (or leave empty to use system ADC)..." style="min-height:100px"></textarea>
       </div>
@@ -822,6 +830,10 @@ const I = {
     vertexApiKeyPh: 'Leave empty if using Service Account or ADC',
     vertexBaseUrl: 'Custom Base URL (Optional)',
     vertexBaseUrlPh: 'e.g. https://us-central1-aiplatform.googleapis.com',
+    vertexServiceTier: 'Service Tier (Latency & Cost)',
+    tierStandard: 'Standard (Default — standard price & latency)',
+    tierFlex: 'Flex (Cost-optimized — 50% discount, sheddable)',
+    tierPriority: 'Priority (Latency-optimized — non-sheddable premium)',
     addVertexBtn: 'Add Vertex AI Credential',
     vertexAdded: 'Vertex AI credential added successfully.',
     footerLicense1: '<strong>License:</strong> Upstream Gemini CLI code remains Apache-2.0.',
@@ -1013,6 +1025,10 @@ const I = {
     vertexApiKeyPh: '若使用服务账号或本地 ADC 凭据请留空',
     vertexBaseUrl: '自定义 Base URL (可选)',
     vertexBaseUrlPh: '例如：https://us-central1-aiplatform.googleapis.com',
+    vertexServiceTier: '服务层级 (时延与成本模式)',
+    tierStandard: 'Standard (默认 — 基准价格与常规响应)',
+    tierFlex: 'Flex (成本优先 — 50% 折扣，闲时算力/高延迟)',
+    tierPriority: 'Priority (优先加速 — 最低延时保障，75-100% 溢价)',
     addVertexBtn: '添加 Vertex AI 凭据',
     vertexAdded: 'Vertex AI 凭据添加成功。',
     footerLicense1: '<strong>许可说明：</strong>上游 Gemini CLI 代码仍然保持 Apache-2.0。',
@@ -1081,6 +1097,14 @@ function applyLang() {
   if (vBase) vBase.textContent = t('vertexBaseUrl');
   const vBaseInput = $('vertex-base-url');
   if (vBaseInput) vBaseInput.placeholder = t('vertexBaseUrlPh');
+  const vTier = $('t-vertex-service-tier');
+  if (vTier) vTier.textContent = t('vertexServiceTier');
+  const optStd = $('opt-tier-standard');
+  if (optStd) optStd.textContent = t('tierStandard');
+  const optFlex = $('opt-tier-flex');
+  if (optFlex) optFlex.textContent = t('tierFlex');
+  const optPri = $('opt-tier-priority');
+  if (optPri) optPri.textContent = t('tierPriority');
   const vSa = $('t-vertex-sa-json');
   if (vSa) vSa.textContent = t('vertexSaKey');
   const vSaInput = $('vertex-sa-json');
@@ -1421,6 +1445,7 @@ function renderCreds(payload) {
       const parts = [];
       if (c.project) parts.push('Project: ' + esc(c.project));
       if (c.location) parts.push('Region: ' + esc(c.location));
+      if (c.serviceTier) parts.push('Tier: ' + esc(c.serviceTier.toUpperCase()));
       if (c.hasServiceAccount) parts.push('[SA Key]');
       if (c.hasApiKey) parts.push('[API Key]');
       if (c.baseUrl) parts.push('Custom URL');
@@ -1739,6 +1764,7 @@ $('add-vertex-btn').onclick = async () => {
     const apiKey = $('vertex-api-key').value.trim() || undefined;
     const baseUrl = $('vertex-base-url').value.trim() || undefined;
     const saRaw = $('vertex-sa-json').value.trim();
+    const serviceTier = $('vertex-service-tier').value || 'standard';
 
     if (!apiKey && (!project || !location)) {
       throw new Error('Either GCP Project ID and Location OR Vertex API Key are required.');
@@ -1763,6 +1789,7 @@ $('add-vertex-btn').onclick = async () => {
         apiKey,
         baseUrl,
         serviceAccountJson,
+        serviceTier,
       }),
     });
 
@@ -1773,6 +1800,7 @@ $('add-vertex-btn').onclick = async () => {
     $('vertex-api-key').value = '';
     $('vertex-base-url').value = '';
     $('vertex-sa-json').value = '';
+    $('vertex-service-tier').value = 'standard';
     setTimeout(() => { $('vertex-meta').textContent = ''; }, 4000);
     await refreshAll();
   } catch(e) {

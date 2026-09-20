@@ -155,6 +155,24 @@ describe('Vertex AI Authentication & Credentials', () => {
       const loaded = await store.getCredential(cred.id);
       expect(loaded?.type).toBe('oauth');
     });
+
+    it('creates and persists a Vertex AI credential with serviceTier', async () => {
+      const root = mkdtempSync(path.join(tmpdir(), 'vtx-store-'));
+      tempDirs.push(root);
+      const store = new PromptCredentialStore(root);
+
+      const cred = await store.createVertexCredential({
+        label: 'Flex Tier Cred',
+        project: 'gcp-flex-proj',
+        location: 'us-central1',
+        serviceTier: 'flex',
+      });
+
+      expect(cred.serviceTier).toBe('flex');
+
+      const loaded = await store.getCredential(cred.id);
+      expect(loaded?.serviceTier).toBe('flex');
+    });
   });
 
   describe('buildAcpChildEnv Environment Setup', () => {
@@ -226,6 +244,41 @@ describe('Vertex AI Authentication & Credentials', () => {
       expect(env['GOOGLE_CLOUD_PROJECT']).toBeUndefined();
       expect(env['GOOGLE_CLOUD_LOCATION']).toBeUndefined();
       expect(env['GOOGLE_APPLICATION_CREDENTIALS']).toBeUndefined();
+    });
+
+    it('sets VERTEX_AI_SHARED_REQUEST_TYPE when serviceTier is flex or priority', () => {
+      const fakeHome = mkdtempSync(path.join(tmpdir(), 'vtx-home-'));
+      tempDirs.push(fakeHome);
+
+      const envFlex = buildAcpChildEnv(fakeHome, defaultAcpSettings, {
+        id: 'vtx-flex',
+        type: 'vertex-ai',
+        label: 'Flex Cred',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        serviceTier: 'flex',
+      });
+      expect(envFlex['VERTEX_AI_SHARED_REQUEST_TYPE']).toBe('flex');
+
+      const envPriority = buildAcpChildEnv(fakeHome, defaultAcpSettings, {
+        id: 'vtx-pri',
+        type: 'vertex-ai',
+        label: 'Priority Cred',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        serviceTier: 'priority',
+      });
+      expect(envPriority['VERTEX_AI_SHARED_REQUEST_TYPE']).toBe('priority');
+
+      const envStandard = buildAcpChildEnv(fakeHome, defaultAcpSettings, {
+        id: 'vtx-std',
+        type: 'vertex-ai',
+        label: 'Standard Cred',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        serviceTier: 'standard',
+      });
+      expect(envStandard['VERTEX_AI_SHARED_REQUEST_TYPE']).toBeUndefined();
     });
   });
 
@@ -399,6 +452,49 @@ describe('Vertex AI Authentication & Credentials', () => {
       expect(foundQuota).toBeDefined();
       expect(foundQuota.status).toBe('ok');
       expect(foundQuota.credential.type).toBe('vertex-ai');
+    });
+
+    it('accepts serviceTier and validates allowed values in POST /v1/credentials/vertex', async () => {
+      const workspaceRoot = mkdtempSync(path.join(tmpdir(), 'vtx-api-ws-'));
+      tempDirs.push(workspaceRoot);
+      const credentialStoreRoot = mkdtempSync(
+        path.join(tmpdir(), 'vtx-api-creds-'),
+      );
+      tempDirs.push(credentialStoreRoot);
+
+      const fakeCliEntry = path.join(workspaceRoot, 'fake-cli.js');
+      writeFileSync(fakeCliEntry, '// fake\n');
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+        timeoutMs: 5000,
+      });
+
+      // Valid serviceTier
+      const validRes = await request(app)
+        .post(PROMPT_API_CREDENTIAL_VERTEX_ROUTE)
+        .send({
+          label: 'Priority Test',
+          project: 'gcp-pri-proj',
+          location: 'us-central1',
+          serviceTier: 'priority',
+        });
+      expect(validRes.status).toBe(201);
+      expect(validRes.body.credential.serviceTier).toBe('priority');
+
+      // Invalid serviceTier
+      const invalidRes = await request(app)
+        .post(PROMPT_API_CREDENTIAL_VERTEX_ROUTE)
+        .send({
+          label: 'Invalid Tier Test',
+          project: 'gcp-inv-proj',
+          location: 'us-central1',
+          serviceTier: 'ultra-speed',
+        });
+      expect(invalidRes.status).toBe(400);
+      expect(invalidRes.body.error).toContain('Invalid "serviceTier"');
     });
   });
 });
