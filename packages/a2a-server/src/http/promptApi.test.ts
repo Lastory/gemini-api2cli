@@ -1083,7 +1083,7 @@ describe('Prompt API routes', () => {
       expect(resInvalid.body.settings.retryCount).toBe(3);
     });
 
-    it('applies timeout override from GEMINI_PROMPT_API_TIMEOUT_MS env variable', async () => {
+    it('applies timeout override from GEMINI_PROMPT_API_TIMEOUT_MS env variable (legacy fallback)', async () => {
       vi.stubEnv('GEMINI_PROMPT_API_TIMEOUT_MS', '45000');
 
       const app = createTestApp({
@@ -1096,6 +1096,62 @@ describe('Prompt API routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.settings.timeoutMs).toBe(45000);
       expect(res.body.defaultTimeoutMs).toBe(45000);
+    });
+
+    it('applies all A2A_CONSOLE_* environment variables correctly', async () => {
+      vi.stubEnv('A2A_CONSOLE_ROTATION_ENABLED', 'false');
+      vi.stubEnv('A2A_CONSOLE_RETRY_ENABLED', 'false');
+      vi.stubEnv('A2A_CONSOLE_RETRY_COUNT', '7');
+      vi.stubEnv('A2A_CONSOLE_TIMEOUT_SEC', '45');
+      vi.stubEnv('A2A_CONSOLE_MAX_WORKERS', '5');
+      vi.stubEnv('A2A_CONSOLE_FAILOVER_WORKERS', '2');
+      vi.stubEnv('A2A_CONSOLE_IDLE_TIMEOUT_SEC', '30');
+      vi.stubEnv('A2A_CONSOLE_KEEPALIVE_SEC', '180');
+      vi.stubEnv('A2A_CONSOLE_MCP_ENABLED', 'true');
+      vi.stubEnv('A2A_CONSOLE_EXTENSIONS_ENABLED', 'true');
+      vi.stubEnv('A2A_CONSOLE_SKILLS_ENABLED', 'true');
+      vi.stubEnv('A2A_CONSOLE_PROXY_URL', 'http://127.0.0.1:8888');
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+      });
+
+      const res = await request(app).get('/v1/settings');
+      expect(res.status).toBe(200);
+      expect(res.body.settings.rotationEnabled).toBe(false);
+      expect(res.body.settings.retryEnabled).toBe(false);
+      expect(res.body.settings.retryCount).toBe(7);
+      expect(res.body.settings.timeoutMs).toBe(45000);
+      expect(res.body.defaultTimeoutMs).toBe(45000);
+      expect(res.body.settings.maxWorkers).toBe(5);
+      expect(res.body.settings.failoverWorkers).toBe(2);
+      expect(res.body.settings.acpIdleTimeoutMs).toBe(30000);
+      expect(res.body.settings.acpKeepaliveIntervalMs).toBe(180000);
+      expect(res.body.settings.mcpEnabled).toBe(true);
+      expect(res.body.settings.extensionsEnabled).toBe(true);
+      expect(res.body.settings.skillsEnabled).toBe(true);
+      expect(res.body.settings.proxyUrl).toBe('http://127.0.0.1:8888');
+    });
+
+    it('prefers A2A_CONSOLE_* over legacy GEMINI_PROMPT_API_* when both are set', async () => {
+      vi.stubEnv('A2A_CONSOLE_RETRY_COUNT', '6');
+      vi.stubEnv('GEMINI_PROMPT_API_RETRY_COUNT', '2');
+      vi.stubEnv('A2A_CONSOLE_TIMEOUT_SEC', '30');
+      vi.stubEnv('GEMINI_PROMPT_API_TIMEOUT_MS', '10000');
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+      });
+
+      const res = await request(app).get('/v1/settings');
+      expect(res.status).toBe(200);
+      expect(res.body.settings.retryCount).toBe(6);
+      expect(res.body.settings.timeoutMs).toBe(30000);
+      expect(res.body.defaultTimeoutMs).toBe(30000);
     });
   });
 });

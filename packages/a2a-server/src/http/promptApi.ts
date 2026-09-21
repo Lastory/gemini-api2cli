@@ -100,7 +100,9 @@ const OAUTH_SCOPE = [
   'https://www.googleapis.com/auth/userinfo.profile',
 ];
 const DEFAULT_PROMPT_API_MODEL =
-  process.env['GEMINI_PROMPT_API_DEFAULT_MODEL'] || DEFAULT_GEMINI_MODEL_AUTO;
+  process.env['A2A_CONSOLE_DEFAULT_MODEL'] ||
+  process.env['GEMINI_PROMPT_API_DEFAULT_MODEL'] ||
+  DEFAULT_GEMINI_MODEL_AUTO;
 const PROMPT_API_MODEL_OPTIONS = [
   {
     id: DEFAULT_GEMINI_MODEL_AUTO,
@@ -289,9 +291,17 @@ function getTimeoutMs(explicitTimeoutMs?: number): number {
     return explicitTimeoutMs;
   }
 
-  const envTimeout = Number(process.env['GEMINI_PROMPT_API_TIMEOUT_MS']);
-  if (Number.isFinite(envTimeout) && envTimeout > 0) {
-    return envTimeout;
+  const envTimeoutSec = Number(process.env['A2A_CONSOLE_TIMEOUT_SEC']);
+  if (Number.isFinite(envTimeoutSec) && envTimeoutSec > 0) {
+    return Math.floor(envTimeoutSec * 1000);
+  }
+
+  const envTimeoutMs = Number(
+    process.env['A2A_CONSOLE_TIMEOUT_MS'] ??
+      process.env['GEMINI_PROMPT_API_TIMEOUT_MS'],
+  );
+  if (Number.isFinite(envTimeoutMs) && envTimeoutMs > 0) {
+    return envTimeoutMs;
   }
 
   return DEFAULT_TIMEOUT_MS;
@@ -371,85 +381,91 @@ function createPromptApiState(
     loginJobs: new Map(),
     settings: {
       rotationEnabled: parseBooleanEnv(
-        process.env['GEMINI_PROMPT_API_ROTATION_ENABLED'] ??
+        process.env['A2A_CONSOLE_ROTATION_ENABLED'] ??
+          process.env['GEMINI_PROMPT_API_ROTATION_ENABLED'] ??
           process.env['GEMINI_PROMPT_API_ROTATION'],
         true,
       ),
       retryEnabled: parseBooleanEnv(
-        process.env['GEMINI_PROMPT_API_RETRY_ENABLED'] ??
+        process.env['A2A_CONSOLE_RETRY_ENABLED'] ??
+          process.env['GEMINI_PROMPT_API_RETRY_ENABLED'] ??
           process.env['GEMINI_PROMPT_API_RETRY'],
         true,
       ),
       retryCount: parseIntegerEnv(
-        process.env['GEMINI_PROMPT_API_RETRY_COUNT'],
+        process.env['A2A_CONSOLE_RETRY_COUNT'] ??
+          process.env['GEMINI_PROMPT_API_RETRY_COUNT'],
         3,
         1,
         10,
       ),
-      timeoutMs: parseIntegerEnv(
-        process.env['GEMINI_PROMPT_API_TIMEOUT_MS'],
-        0,
-        0,
+      timeoutMs: (() => {
+        const secVal = process.env['A2A_CONSOLE_TIMEOUT_SEC'];
+        if (secVal !== undefined && secVal.trim() !== '') {
+          const s = Number(secVal);
+          if (Number.isFinite(s) && s >= 0) {
+            return Math.floor(s * 1000);
+          }
+        }
+        return parseIntegerEnv(
+          process.env['A2A_CONSOLE_TIMEOUT_MS'] ??
+            process.env['GEMINI_PROMPT_API_TIMEOUT_MS'],
+          0,
+          0,
+        );
+      })(),
+      mcpEnabled: parseBooleanEnv(
+        process.env['A2A_CONSOLE_MCP_ENABLED'],
+        false,
       ),
-      mcpEnabled: false,
-      extensionsEnabled: false,
-      skillsEnabled: false,
-      proxyUrl: '',
+      extensionsEnabled: parseBooleanEnv(
+        process.env['A2A_CONSOLE_EXTENSIONS_ENABLED'],
+        false,
+      ),
+      skillsEnabled: parseBooleanEnv(
+        process.env['A2A_CONSOLE_SKILLS_ENABLED'],
+        false,
+      ),
+      proxyUrl: process.env['A2A_CONSOLE_PROXY_URL']?.trim() ?? '',
       // Default: never time out. Workers stay warm across requests and are
       // only recycled on credential failover or explicit kill. Operators can
       // set a positive value (seconds, via the admin console) to trim idle
       // processes on memory-constrained hosts.
-      acpIdleTimeoutMs:
-        process.env['GEMINI_PROMPT_API_ACP_IDLE_TIMEOUT_SEC'] !== undefined &&
-        !Number.isNaN(
-          Number(process.env['GEMINI_PROMPT_API_ACP_IDLE_TIMEOUT_SEC']),
-        )
-          ? Math.max(
-              0,
-              Math.floor(
-                Number(process.env['GEMINI_PROMPT_API_ACP_IDLE_TIMEOUT_SEC']) *
-                  1000,
-              ),
-            )
-          : 0,
-      maxWorkers:
-        process.env['GEMINI_PROMPT_API_MAX_WORKERS'] !== undefined &&
-        !Number.isNaN(Number(process.env['GEMINI_PROMPT_API_MAX_WORKERS']))
-          ? Math.max(
-              0,
-              Math.floor(Number(process.env['GEMINI_PROMPT_API_MAX_WORKERS'])),
-            )
-          : 2,
-      failoverWorkers:
-        process.env['GEMINI_PROMPT_API_FAILOVER_WORKERS'] !== undefined &&
-        !Number.isNaN(Number(process.env['GEMINI_PROMPT_API_FAILOVER_WORKERS']))
-          ? Math.max(
-              0,
-              Math.floor(
-                Number(process.env['GEMINI_PROMPT_API_FAILOVER_WORKERS']),
-              ),
-            )
-          : 1,
+      acpIdleTimeoutMs: (() => {
+        const raw =
+          process.env['A2A_CONSOLE_IDLE_TIMEOUT_SEC'] ??
+          process.env['GEMINI_PROMPT_API_ACP_IDLE_TIMEOUT_SEC'];
+        if (raw !== undefined && !Number.isNaN(Number(raw))) {
+          return Math.max(0, Math.floor(Number(raw) * 1000));
+        }
+        return 0;
+      })(),
+      maxWorkers: parseIntegerEnv(
+        process.env['A2A_CONSOLE_MAX_WORKERS'] ??
+          process.env['GEMINI_PROMPT_API_MAX_WORKERS'],
+        2,
+        0,
+      ),
+      failoverWorkers: parseIntegerEnv(
+        process.env['A2A_CONSOLE_FAILOVER_WORKERS'] ??
+          process.env['GEMINI_PROMPT_API_FAILOVER_WORKERS'],
+        1,
+        0,
+      ),
       // Default: 9 minutes. Comfortably under the typical 10-15 min
       // HTTP/2 idle close used by Google's frontends and the 1-hour
       // OAuth access_token TTL — so the first user request after a
       // long lull doesn't pay a TLS+token-refresh round trip.
       // Operators can set 0 to disable.
-      acpKeepaliveIntervalMs:
-        process.env['GEMINI_PROMPT_API_ACP_KEEPALIVE_INTERVAL_SEC'] !==
-          undefined &&
-        !Number.isNaN(
-          Number(process.env['GEMINI_PROMPT_API_ACP_KEEPALIVE_INTERVAL_SEC']),
-        )
-          ? Math.max(
-              0,
-              Math.floor(
-                Number(
-                  process.env['GEMINI_PROMPT_API_ACP_KEEPALIVE_INTERVAL_SEC'],
-                ) * 1000,
-              ),
-            )
-          : 9 * 60_000,
+      acpKeepaliveIntervalMs: (() => {
+        const raw =
+          process.env['A2A_CONSOLE_KEEPALIVE_SEC'] ??
+          process.env['GEMINI_PROMPT_API_ACP_KEEPALIVE_INTERVAL_SEC'];
+        if (raw !== undefined && !Number.isNaN(Number(raw))) {
+          return Math.max(0, Math.floor(Number(raw) * 1000));
+        }
+        return 9 * 60_000;
+      })(),
     },
     acpPool,
     rotationIndex: 0,
