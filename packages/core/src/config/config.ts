@@ -3607,6 +3607,13 @@ export class Config implements McpContext, AgentLoopContext {
    * Returns the configured default request timeout in milliseconds.
    */
   getRequestTimeoutMs(): number | undefined {
+    const envTimeout = process.env['GEMINI_REQUEST_TIMEOUT_MS'];
+    if (envTimeout) {
+      const ms = parseInt(envTimeout, 10);
+      if (Number.isInteger(ms) && ms > 0) {
+        return ms;
+      }
+    }
     const flag =
       this.experiments?.flags?.[ExperimentFlags.DEFAULT_REQUEST_TIMEOUT];
     if (flag?.intValue !== undefined) {

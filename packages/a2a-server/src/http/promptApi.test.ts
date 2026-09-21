@@ -42,6 +42,7 @@ import {
   type PromptApiDependencies,
 } from './promptApi.js';
 import { PromptCredentialStore } from './promptCredentialStore.js';
+import type { AcpProcessPool } from './acpProcessPool.js';
 import { CodeAssistServer } from '@google/gemini-cli-core';
 
 // Set a fixed auth token for tests so the auth middleware passes.
@@ -822,6 +823,178 @@ describe('Prompt API routes', () => {
     expect(lastChunk.choices[0].delta.content).toContain('Error');
   });
 
+  describe('ACP request timeout handling', () => {
+    let workspaceRoot: string;
+    let credentialStoreRoot: string;
+    let fakeCliEntry: string;
+
+    beforeEach(() => {
+      workspaceRoot = mkdtempSync(
+        path.join(tmpdir(), 'gemini-prompt-api-workspace-'),
+      );
+      tempDirs.push(workspaceRoot);
+      credentialStoreRoot = mkdtempSync(
+        path.join(tmpdir(), 'gemini-prompt-api-credentials-'),
+      );
+      tempDirs.push(credentialStoreRoot);
+      fakeCliEntry = path.join(workspaceRoot, 'fake-cli.js');
+      writeFileSync(fakeCliEntry, '// fake cli entry\n');
+    });
+
+    it('cancels prompt and returns 500 when JSON request exceeds timeoutMs', async () => {
+      let promptCancelled = false;
+      let sessionDestroyed = false;
+      const mockWorker = {
+        credentialId: 'default',
+        createSession: vi.fn().mockResolvedValue('session-json-timeout'),
+        setSessionModel: vi.fn().mockResolvedValue(undefined),
+        prompt: vi.fn().mockImplementation(() => new Promise(() => {})),
+        cancelPrompt: vi.fn().mockImplementation(async () => {
+          promptCancelled = true;
+        }),
+        destroySession: vi.fn().mockImplementation(() => {
+          sessionDestroyed = true;
+        }),
+      };
+
+      const mockAcpPool = {
+        getOrCreate: vi.fn().mockResolvedValue(mockWorker),
+        getAnyIdleWorker: vi.fn().mockReturnValue(undefined),
+      } as unknown as AcpProcessPool;
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+        timeoutMs: 50,
+        acpPool: mockAcpPool,
+      });
+
+      const response = await request(app)
+        .post(PROMPT_API_OPENAI_COMPLETIONS_ROUTE)
+        .send({
+          messages: [{ role: 'user', content: 'hello' }],
+          model: 'gemini-2.5-flash',
+        });
+
+      expect(response.status).toBe(500);
+      expect(response.body.error.message).toContain(
+        'Request timed out after 50ms.',
+      );
+      expect(mockWorker.cancelPrompt).toHaveBeenCalledWith(
+        'session-json-timeout',
+      );
+      expect(promptCancelled).toBe(true);
+      expect(sessionDestroyed).toBe(true);
+    });
+
+    it('cancels prompt, writes stream error, and stops heartbeat when streaming request exceeds timeoutMs', async () => {
+      let promptCancelled = false;
+      let sessionDestroyed = false;
+      const mockWorker = {
+        credentialId: 'default',
+        createSession: vi.fn().mockResolvedValue('session-stream-timeout'),
+        setSessionModel: vi.fn().mockResolvedValue(undefined),
+        prompt: vi.fn().mockImplementation((_sessionId, _blocks, onUpdate) => {
+          onUpdate({
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'Partial output before timeout' },
+            },
+          });
+          return new Promise(() => {});
+        }),
+        cancelPrompt: vi.fn().mockImplementation(async () => {
+          promptCancelled = true;
+        }),
+        destroySession: vi.fn().mockImplementation(() => {
+          sessionDestroyed = true;
+        }),
+      };
+
+      const mockAcpPool = {
+        getOrCreate: vi.fn().mockResolvedValue(mockWorker),
+        getAnyIdleWorker: vi.fn().mockReturnValue(undefined),
+      } as unknown as AcpProcessPool;
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+        timeoutMs: 50,
+        acpPool: mockAcpPool,
+      });
+
+      const response = await request(app)
+        .post(PROMPT_API_OPENAI_COMPLETIONS_ROUTE)
+        .send({
+          messages: [{ role: 'user', content: 'stream hello' }],
+          model: 'gemini-2.5-flash',
+          stream: true,
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.headers['content-type']).toContain('text/event-stream');
+      expect(response.text).toContain('Partial output before timeout');
+      expect(response.text).toContain('Request timed out after 50ms.');
+      expect(mockWorker.cancelPrompt).toHaveBeenCalledWith(
+        'session-stream-timeout',
+      );
+      expect(promptCancelled).toBe(true);
+      expect(sessionDestroyed).toBe(true);
+    });
+
+    it('respects state.settings.timeoutMs over deps.timeoutMs when updated via settings', async () => {
+      let promptCancelled = false;
+      const mockWorker = {
+        credentialId: 'default',
+        createSession: vi.fn().mockResolvedValue('session-settings-timeout'),
+        setSessionModel: vi.fn().mockResolvedValue(undefined),
+        prompt: vi.fn().mockImplementation(() => new Promise(() => {})),
+        cancelPrompt: vi.fn().mockImplementation(async () => {
+          promptCancelled = true;
+        }),
+        destroySession: vi.fn(),
+      };
+
+      const mockAcpPool = {
+        getOrCreate: vi.fn().mockResolvedValue(mockWorker),
+        getAnyIdleWorker: vi.fn().mockReturnValue(undefined),
+      } as unknown as AcpProcessPool;
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+        timeoutMs: 10000,
+        acpPool: mockAcpPool,
+      });
+
+      // Update settings with a short timeout of 50ms
+      const settingsRes = await request(app)
+        .put('/v1/settings')
+        .send({ timeoutMs: 50 });
+      expect(settingsRes.status).toBe(200);
+      expect(settingsRes.body.settings.timeoutMs).toBe(50);
+
+      const response = await request(app)
+        .post(PROMPT_API_OPENAI_COMPLETIONS_ROUTE)
+        .send({
+          messages: [{ role: 'user', content: 'hello' }],
+          model: 'gemini-2.5-flash',
+        });
+
+      expect(response.status).toBe(500);
+      expect(response.body.error.message).toContain(
+        'Request timed out after 50ms.',
+      );
+      expect(mockWorker.cancelPrompt).toHaveBeenCalledWith(
+        'session-settings-timeout',
+      );
+      expect(promptCancelled).toBe(true);
+    });
+  });
+
   describe('Settings preconfiguration via environment variables', () => {
     let workspaceRoot: string;
     let credentialStoreRoot: string;
@@ -908,6 +1081,21 @@ describe('Prompt API routes', () => {
       const resInvalid = await request(appInvalid).get('/v1/settings');
       expect(resInvalid.status).toBe(200);
       expect(resInvalid.body.settings.retryCount).toBe(3);
+    });
+
+    it('applies timeout override from GEMINI_PROMPT_API_TIMEOUT_MS env variable', async () => {
+      vi.stubEnv('GEMINI_PROMPT_API_TIMEOUT_MS', '45000');
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+      });
+
+      const res = await request(app).get('/v1/settings');
+      expect(res.status).toBe(200);
+      expect(res.body.settings.timeoutMs).toBe(45000);
+      expect(res.body.defaultTimeoutMs).toBe(45000);
     });
   });
 });

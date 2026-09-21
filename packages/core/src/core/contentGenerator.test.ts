@@ -47,6 +47,7 @@ const mockConfig = {
   getContentGeneratorConfig: vi.fn().mockReturnValue({}),
   isInteractive: vi.fn().mockReturnValue(false),
   getExperiments: vi.fn().mockReturnValue(undefined),
+  getRequestTimeoutMs: vi.fn().mockReturnValue(undefined),
 } as unknown as Config;
 
 describe('getAuthTypeFromEnv', () => {
@@ -511,6 +512,61 @@ describe('createContentGenerator', () => {
         }),
       }),
     );
+  });
+
+  it('should inject timeout into httpOptions when config.timeout is set', async () => {
+    const mockGenerator = {
+      models: {},
+    } as unknown as GoogleGenAI;
+    vi.mocked(GoogleGenAI).mockImplementation(() => mockGenerator);
+
+    await createContentGenerator(
+      {
+        apiKey: 'test-api-key',
+        vertexai: true,
+        authType: AuthType.USE_VERTEX_AI,
+        timeout: 45000,
+      },
+      mockConfig,
+    );
+
+    expect(GoogleGenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpOptions: expect.objectContaining({
+          timeout: 45000,
+        }),
+      }),
+    );
+  });
+
+  it('should inject timeout into httpOptions when gcConfig.getRequestTimeoutMs() is set', async () => {
+    vi.mocked(mockConfig.getRequestTimeoutMs).mockReturnValue(30000);
+
+    const mockGenerator = {
+      models: {},
+    } as unknown as GoogleGenAI;
+    vi.mocked(GoogleGenAI).mockImplementation(() => mockGenerator);
+
+    try {
+      await createContentGenerator(
+        {
+          apiKey: 'test-api-key',
+          vertexai: true,
+          authType: AuthType.USE_VERTEX_AI,
+        },
+        mockConfig,
+      );
+
+      expect(GoogleGenAI).toHaveBeenCalledWith(
+        expect.objectContaining({
+          httpOptions: expect.objectContaining({
+            timeout: 30000,
+          }),
+        }),
+      );
+    } finally {
+      vi.mocked(mockConfig.getRequestTimeoutMs).mockReturnValue(undefined);
+    }
   });
 
   it('should inject HttpsProxyAgent into googleAuthOptions when proxy URL uses https://', async () => {

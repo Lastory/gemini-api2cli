@@ -107,6 +107,7 @@ export type ContentGeneratorConfig = {
   baseUrl?: string;
   customHeaders?: Record<string, string>;
   vertexAiRouting?: VertexAiRoutingConfig;
+  timeout?: number;
 };
 
 export type VertexAiRequestType = 'dedicated' | 'shared';
@@ -159,12 +160,22 @@ export async function createContentGeneratorConfig(
     };
   }
 
+  const envTimeout = process.env['GEMINI_REQUEST_TIMEOUT_MS'];
+  let timeout: number | undefined = undefined;
+  if (envTimeout) {
+    const parsed = parseInt(envTimeout, 10);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      timeout = parsed;
+    }
+  }
+
   const contentGeneratorConfig: ContentGeneratorConfig = {
     authType,
     proxy: config?.getProxy(),
     baseUrl,
     customHeaders,
     vertexAiRouting: resolvedVertexAiRouting,
+    ...(timeout !== undefined ? { timeout } : {}),
   };
 
   // If we are using Google auth or we are in Cloud Shell, there is nothing else to validate for now.
@@ -389,10 +400,16 @@ export async function createContentGenerator(
       const httpOptions: {
         baseUrl?: string;
         headers: Record<string, string>;
+        timeout?: number;
       } = { headers };
 
       if (baseUrl) {
         httpOptions.baseUrl = baseUrl;
+      }
+
+      const requestTimeout = config.timeout ?? gcConfig.getRequestTimeoutMs?.();
+      if (requestTimeout !== undefined && requestTimeout > 0) {
+        httpOptions.timeout = requestTimeout;
       }
 
       const proxyUrl = config.proxy?.trim();

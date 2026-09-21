@@ -111,6 +111,7 @@ export interface AcpPoolSettings {
    * the 1-hour OAuth access token TTL.
    */
   keepaliveIntervalMs?: number;
+  timeoutMs?: number;
 }
 
 const GEMINI_DIR_NAME = '.gemini';
@@ -227,6 +228,9 @@ export function buildAcpChildEnv(
     env['HTTPS_PROXY'] = settings.proxyUrl;
     env['http_proxy'] = settings.proxyUrl;
     env['https_proxy'] = settings.proxyUrl;
+  }
+  if (settings.timeoutMs && settings.timeoutMs > 0) {
+    env['GEMINI_REQUEST_TIMEOUT_MS'] = String(settings.timeoutMs);
   }
 
   return env;

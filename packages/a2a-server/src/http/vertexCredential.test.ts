@@ -280,6 +280,23 @@ describe('Vertex AI Authentication & Credentials', () => {
       });
       expect(envStandard['VERTEX_AI_SHARED_REQUEST_TYPE']).toBeUndefined();
     });
+
+    it('sets GEMINI_REQUEST_TIMEOUT_MS when settings.timeoutMs is positive', () => {
+      const fakeHome = mkdtempSync(path.join(tmpdir(), 'vtx-home-'));
+      tempDirs.push(fakeHome);
+
+      const envWithTimeout = buildAcpChildEnv(fakeHome, {
+        ...defaultAcpSettings,
+        timeoutMs: 45000,
+      });
+      expect(envWithTimeout['GEMINI_REQUEST_TIMEOUT_MS']).toBe('45000');
+
+      const envWithoutTimeout = buildAcpChildEnv(fakeHome, {
+        ...defaultAcpSettings,
+        timeoutMs: 0,
+      });
+      expect(envWithoutTimeout['GEMINI_REQUEST_TIMEOUT_MS']).toBeUndefined();
+    });
   });
 
   describe('Prompt API HTTP Routes for Vertex AI', () => {

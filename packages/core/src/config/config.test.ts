@@ -806,19 +806,18 @@ describe('Server Config (config.ts)', () => {
         expect(config.getRequestTimeoutMs()).toBeUndefined();
       });
 
-      it('should return undefined if intValue is negative', () => {
-        const config = new Config({
-          ...baseParams,
-          experiments: {
-            flags: {
-              [ExperimentFlags.DEFAULT_REQUEST_TIMEOUT]: {
-                intValue: '-10',
-              },
-            },
-            experimentIds: [],
-          },
-        } as unknown as ConfigParameters);
+      it('should return timeout in milliseconds if GEMINI_REQUEST_TIMEOUT_MS is set', () => {
+        vi.stubEnv('GEMINI_REQUEST_TIMEOUT_MS', '45000');
+        const config = new Config(baseParams);
+        expect(config.getRequestTimeoutMs()).toBe(45000);
+        vi.unstubAllEnvs();
+      });
+
+      it('should ignore GEMINI_REQUEST_TIMEOUT_MS if invalid or non-positive', () => {
+        vi.stubEnv('GEMINI_REQUEST_TIMEOUT_MS', '-100');
+        const config = new Config(baseParams);
         expect(config.getRequestTimeoutMs()).toBeUndefined();
+        vi.unstubAllEnvs();
       });
     });
   });

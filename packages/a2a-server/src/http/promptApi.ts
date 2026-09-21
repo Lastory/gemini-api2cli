@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: LicenseRef-CNC-1.0
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from '@google/gemini-cli-core';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { homedir } from '@google/gemini-cli-core';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
@@ -91,11 +91,6 @@ const GEMINI_DIR_NAME = '.gemini';
 const MANUAL_CODE_REDIRECT_URI = 'https://codeassist.google.com/authcode';
 const OAUTH_CREDENTIAL_FILE_NAME = 'oauth_creds.json';
 const GOOGLE_ACCOUNTS_FILE_NAME = 'google_accounts.json';
-const AUTH_ARTIFACT_NAMES = [
-  OAUTH_CREDENTIAL_FILE_NAME,
-  'gemini-credentials.json',
-  GOOGLE_ACCOUNTS_FILE_NAME,
-] as const;
 const OAUTH_CLIENT_ID =
   '681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com';
 const OAUTH_CLIENT_SECRET = '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';
@@ -104,24 +99,6 @@ const OAUTH_SCOPE = [
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile',
 ];
-const STRIPPED_CHILD_ENV_KEYS = [
-  'CLOUD_SHELL',
-  'GEMINI_API_KEY',
-  'GEMINI_CLI_HOME',
-  'GEMINI_CLI_SYSTEM_DEFAULTS_PATH',
-  'GEMINI_CLI_SYSTEM_SETTINGS_PATH',
-  'GEMINI_CLI_USE_COMPUTE_ADC',
-  'GEMINI_SYSTEM_MD',
-  'GEMINI_WRITE_SYSTEM_MD',
-  'GOOGLE_API_KEY',
-  'GOOGLE_APPLICATION_CREDENTIALS',
-  'GOOGLE_CLOUD_ACCESS_TOKEN',
-  'GOOGLE_CLOUD_LOCATION',
-  'GOOGLE_CLOUD_PROJECT',
-  'GOOGLE_CLOUD_PROJECT_ID',
-  'GOOGLE_GENAI_USE_GCA',
-  'GOOGLE_GENAI_USE_VERTEXAI',
-] as const;
 const DEFAULT_PROMPT_API_MODEL =
   process.env['GEMINI_PROMPT_API_DEFAULT_MODEL'] || DEFAULT_GEMINI_MODEL_AUTO;
 const PROMPT_API_MODEL_OPTIONS = [
@@ -203,13 +180,6 @@ const PROMPT_API_MODEL_ALIASES = [
   },
 ] as const;
 
-type StreamJsonEvent = {
-  type: string;
-  role?: string;
-  content?: string;
-  [key: string]: unknown;
-};
-
 type PromptCredentialLoginRequestBody = {
   credentialId?: unknown;
   label?: unknown;
@@ -221,12 +191,6 @@ type PromptCredentialLoginCompleteRequestBody = {
 };
 type PromptCredentialLoginFlow = 'loopback' | 'manual_code';
 
-type NormalizedPromptRequest = {
-  prompt: string;
-  systemPrompt?: string;
-  model?: string;
-};
-
 type SpawnProcess = typeof spawn;
 
 export interface PromptApiDependencies {
@@ -236,6 +200,7 @@ export interface PromptApiDependencies {
   timeoutMs?: number;
   sourceGeminiCliHome?: string;
   credentialStoreRoot?: string;
+  acpPool?: AcpProcessPool;
 }
 
 class BadRequestError extends Error {}
@@ -392,118 +357,9 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-type PromptOverride = {
-  tempDir: string;
-  homeDir: string;
-  cwd: string;
-  filePath?: string;
-  cleanup: () => Promise<void>;
-};
-
 function getSourceGeminiCliHome(sourceGeminiCliHome?: string): string {
   return sourceGeminiCliHome ?? process.env['GEMINI_CLI_HOME'] ?? homedir();
 }
-
-async function copyFileIfExists(
-  sourcePath: string,
-  targetPath: string,
-): Promise<void> {
-  if (!existsSync(sourcePath)) {
-    return;
-  }
-
-  await mkdir(path.dirname(targetPath), { recursive: true });
-  await copyFile(sourcePath, targetPath);
-}
-
-function buildIsolatedChildEnv(
-  isolatedHomeDir: string,
-  promptPath: string | undefined,
-  settings: PromptApiSettings,
-): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  for (const key of STRIPPED_CHILD_ENV_KEYS) {
-    delete env[key];
-  }
-
-  env['GEMINI_CLI_HOME'] = isolatedHomeDir;
-  env['GOOGLE_GENAI_USE_GCA'] = 'true';
-  env['HOME'] = isolatedHomeDir;
-  env['USERPROFILE'] = isolatedHomeDir;
-
-  if (promptPath) {
-    env['GEMINI_SYSTEM_MD'] = promptPath;
-  }
-
-  // Pass lite-mode flags to CLI child process
-  if (!settings.mcpEnabled) {
-    env['GEMINI_MCP_DISABLED'] = 'true';
-  }
-  if (!settings.extensionsEnabled) {
-    env['GEMINI_EXTENSIONS_DISABLED'] = 'true';
-  }
-  if (!settings.skillsEnabled) {
-    env['GEMINI_SKILLS_DISABLED'] = 'true';
-  }
-
-  // Proxy support for non-TUN mode
-  if (settings.proxyUrl) {
-    env['HTTP_PROXY'] = settings.proxyUrl;
-    env['HTTPS_PROXY'] = settings.proxyUrl;
-    env['http_proxy'] = settings.proxyUrl;
-    env['https_proxy'] = settings.proxyUrl;
-  }
-
-  return env;
-}
-
-async function createPromptOverride(
-  systemPrompt: string | undefined,
-  sourceGeminiCliHome?: string,
-): Promise<PromptOverride> {
-  const tempDir = await mkdtemp(path.join(tmpdir(), 'gemini-prompt-api-'));
-  const homeDir = path.join(tempDir, 'home');
-  const cwd = path.join(tempDir, 'workspace');
-  const isolatedGeminiDir = path.join(homeDir, GEMINI_DIR_NAME);
-
-  await mkdir(cwd, { recursive: true });
-  await mkdir(isolatedGeminiDir, { recursive: true });
-
-  const sourceGeminiDir = path.join(
-    getSourceGeminiCliHome(sourceGeminiCliHome),
-    GEMINI_DIR_NAME,
-  );
-  await Promise.all(
-    AUTH_ARTIFACT_NAMES.map((fileName) =>
-      copyFileIfExists(
-        path.join(sourceGeminiDir, fileName),
-        path.join(isolatedGeminiDir, fileName),
-      ),
-    ),
-  );
-
-  let promptPath: string | undefined;
-  if (systemPrompt !== undefined) {
-    promptPath = path.join(tempDir, 'system.md');
-    await writeFile(promptPath, systemPrompt, 'utf8');
-  }
-
-  return {
-    tempDir,
-    homeDir,
-    cwd,
-    filePath: promptPath,
-    cleanup: async () => {
-      await rm(tempDir, { recursive: true, force: true });
-    },
-  };
-}
-
-type PromptInvocation = {
-  child: ChildProcessWithoutNullStreams;
-  cleanup: () => Promise<void>;
-  didTimeout: () => boolean;
-};
 
 function createPromptApiState(
   credentialStoreRoot: string | undefined,
@@ -530,7 +386,11 @@ function createPromptApiState(
         1,
         10,
       ),
-      timeoutMs: 0,
+      timeoutMs: parseIntegerEnv(
+        process.env['GEMINI_PROMPT_API_TIMEOUT_MS'],
+        0,
+        0,
+      ),
       mcpEnabled: false,
       extensionsEnabled: false,
       skillsEnabled: false,
@@ -1167,89 +1027,6 @@ function normalizeCredentialLoginCompleteBody(body: unknown): {
   return { callbackUrl, authorizationCode };
 }
 
-async function startPromptInvocation(
-  requestBody: NormalizedPromptRequest,
-  deps: Required<PromptApiDependencies>,
-  state: PromptApiState,
-): Promise<PromptInvocation> {
-  if (!existsSync(deps.cliEntryPath)) {
-    throw new Error(
-      `Gemini CLI entrypoint not found at ${deps.cliEntryPath}. Run "npm run build --workspace @google/gemini-cli" or "npm run bundle" first.`,
-    );
-  }
-
-  const sourceGeminiCliHome = await getEffectiveSourceGeminiCliHome(
-    deps,
-    state,
-  );
-  const promptOverride = await createPromptOverride(
-    requestBody.systemPrompt,
-    sourceGeminiCliHome,
-  );
-  const args = [
-    '--no-warnings=DEP0040',
-    deps.cliEntryPath,
-    '--prompt',
-    '',
-    '--output-format',
-    'stream-json',
-  ];
-
-  args.push('--model', normalizeRequestedModel(requestBody.model, state));
-
-  logger.info(`[Prompt API] Prompt length: ${requestBody.prompt.length} chars`);
-
-  let child: ChildProcessWithoutNullStreams | undefined;
-  let didTimeout = false;
-  let timeout: NodeJS.Timeout | undefined;
-
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    child = deps.spawnProcess(process.execPath, args, {
-      cwd: promptOverride.cwd,
-      env: buildIsolatedChildEnv(
-        promptOverride.homeDir,
-        promptOverride.filePath,
-        state.settings,
-      ),
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }) as unknown as ChildProcessWithoutNullStreams;
-
-    // Feed prompt via stdin to avoid ENAMETOOLONG on long conversations.
-    // CLI reads stdin when !process.stdin.isTTY and prepends it to --prompt.
-    child.stdin.write(requestBody.prompt);
-    child.stdin.end();
-
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-
-    timeout = setTimeout(
-      () => {
-        didTimeout = true;
-        child?.kill();
-      },
-      state.settings.timeoutMs > 0 ? state.settings.timeoutMs : deps.timeoutMs,
-    );
-
-    return {
-      child,
-      cleanup: async () => {
-        if (timeout) {
-          clearTimeout(timeout);
-        }
-        await promptOverride.cleanup();
-      },
-      didTimeout: () => didTimeout,
-    };
-  } catch (error) {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    await promptOverride.cleanup();
-    throw error;
-  }
-}
-
 function createPromptCredentialOAuthClient(proxyUrl?: string): OAuth2Client {
   return new OAuth2Client({
     clientId: OAUTH_CLIENT_ID,
@@ -1527,110 +1304,11 @@ function getPromptApiCredentialLoginPayload(
   };
 }
 
-function parseStreamEvent(line: string): StreamJsonEvent | undefined {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    return JSON.parse(line) as StreamJsonEvent;
-  } catch {
-    return undefined;
-  }
-}
-
-async function waitForChildExit(
-  child: ChildProcessWithoutNullStreams,
-): Promise<number | null> {
-  return new Promise<number | null>((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', (exitCode) => resolve(exitCode));
-  });
-}
-
-async function consumeOutputLines(
-  stream: NodeJS.ReadableStream,
-  onLine: (line: string) => void,
-): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    let buffer = '';
-
-    stream.on('data', (chunk) => {
-      buffer += chunk.toString();
-
-      while (true) {
-        const newlineIndex = buffer.indexOf('\n');
-        if (newlineIndex === -1) {
-          break;
-        }
-
-        const line = buffer.slice(0, newlineIndex).replace(/\r$/, '');
-        buffer = buffer.slice(newlineIndex + 1);
-        onLine(line);
-      }
-    });
-
-    stream.once('end', () => {
-      const trailingLine = buffer.trim();
-      if (trailingLine.length > 0) {
-        onLine(trailingLine);
-      }
-      resolve();
-    });
-
-    stream.once('error', reject);
-  });
-}
-
 function logPromptApiError(error: unknown) {
   logger.error(
     '[Prompt API] Request failed',
     error instanceof Error ? (error.stack ?? error.message) : error,
   );
-}
-
-/* ── Adapter-based handlers (Gemini / OpenAI format) ── */
-
-async function runSingleJsonInvocation(
-  normalized: NormalizedPromptRequest,
-  deps: Required<PromptApiDependencies>,
-  state: PromptApiState,
-): Promise<{
-  assistantText: string;
-  exitCode: number | null;
-  didTimeout: boolean;
-}> {
-  const invocation = await startPromptInvocation(normalized, deps, state);
-  const { child } = invocation;
-
-  let _stderrOutput = '';
-  let assistantText = '';
-
-  child.stderr.on('data', (chunk: string) => {
-    _stderrOutput += chunk;
-  });
-
-  const stdoutDone = consumeOutputLines(child.stdout, (line) => {
-    if (line.trim().length === 0) return;
-    const event = parseStreamEvent(line);
-    if (
-      event &&
-      event.type === 'message' &&
-      event.role === 'assistant' &&
-      typeof event.content === 'string'
-    ) {
-      assistantText += event.content;
-    }
-  });
-
-  try {
-    const [exitCode] = await Promise.all([waitForChildExit(child), stdoutDone]);
-    if (exitCode !== 0 && _stderrOutput.trim().length > 0) {
-      logger.error(
-        `[Prompt API] CLI stderr (exit ${String(exitCode)}): ${_stderrOutput.trim()}`,
-      );
-    }
-    return { assistantText, exitCode, didTimeout: invocation.didTimeout() };
-  } finally {
-    await invocation.cleanup();
-  }
 }
 
 /* ── ACP-mode request handler ── */
@@ -1732,6 +1410,10 @@ async function getAcpWorkerAndSession(
       maxWorkers: state.settings.maxWorkers,
       failoverWorkers: state.settings.failoverWorkers,
       keepaliveIntervalMs: state.settings.acpKeepaliveIntervalMs,
+      timeoutMs:
+        state.settings.timeoutMs > 0
+          ? state.settings.timeoutMs
+          : deps.timeoutMs,
     },
     cred,
   );
@@ -2073,6 +1755,10 @@ async function getAcpWorkerAndSessionExcluding(
           maxWorkers: state.settings.maxWorkers,
           failoverWorkers: state.settings.failoverWorkers,
           keepaliveIntervalMs: state.settings.acpKeepaliveIntervalMs,
+          timeoutMs:
+            state.settings.timeoutMs > 0
+              ? state.settings.timeoutMs
+              : deps.timeoutMs,
         },
         cred,
       );
@@ -2421,9 +2107,16 @@ async function handleAcpJsonRequest(
         }
       }
 
+      const timeoutMs =
+        state.settings.timeoutMs > 0
+          ? state.settings.timeoutMs
+          : deps.timeoutMs;
+      let didTimeout = false;
+      let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+
       try {
         let assistantText = '';
-        const promptResponse = await worker.prompt(
+        const promptPromise = worker.prompt(
           sessionId,
           contentBlocks,
           (update: SessionNotification) => {
@@ -2437,6 +2130,19 @@ async function handleAcpJsonRequest(
             logger.info(`[ACP] chunk: ${JSON.stringify(update)}\n`);
           },
         );
+
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutTimer = setTimeout(() => {
+            didTimeout = true;
+            void worker.cancelPrompt(sessionId);
+            reject(new Error(`Request timed out after ${timeoutMs}ms.`));
+          }, timeoutMs);
+        });
+
+        const promptResponse = await Promise.race([
+          promptPromise,
+          timeoutPromise,
+        ]);
 
         const usageInfo = extractUsageInfo(promptResponse);
         return res
@@ -2455,6 +2161,12 @@ async function handleAcpJsonRequest(
           `[ACP] Prompt error (attempt ${attempt + 1}/${maxAttempts}): ${lastError}`,
         );
 
+        if (didTimeout) {
+          return res
+            .status(500)
+            .json(adapter.buildJsonError(lastError, 500, model, requestId));
+        }
+
         // Mark the credential as unhealthy. applyCredentialCooldown
         // picks the right cooldown duration:
         //   - Google's quotaResetTimeStamp when present (precise)
@@ -2469,6 +2181,9 @@ async function handleAcpJsonRequest(
             .json(adapter.buildJsonError(lastError, 500, model, requestId));
         }
       } finally {
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+        }
         if (worker && sessionId) {
           worker.destroySession(sessionId);
         }
@@ -2641,22 +2356,29 @@ async function handleAcpStreamingRequest(
         stopHeartbeat = startStreamHeartbeat(res);
       }
 
+      const timeoutMs =
+        state.settings.timeoutMs > 0
+          ? state.settings.timeoutMs
+          : deps.timeoutMs;
       let isFirst = true;
       let cancelled = false;
+      let didTimeout = false;
+      let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
 
       const abortHandler = () => {
         cancelled = true;
+        if (timeoutTimer) clearTimeout(timeoutTimer);
         worker.cancelPrompt(sessionId).catch(() => {});
       };
       req.on('aborted', abortHandler);
       res.on('close', abortHandler);
 
       try {
-        const promptResponse = await worker.prompt(
+        const promptPromise = worker.prompt(
           sessionId,
           contentBlocks,
           (update: SessionNotification) => {
-            if (cancelled) return;
+            if (cancelled || didTimeout) return;
             if (
               update.update.sessionUpdate === 'agent_message_chunk' &&
               update.update.content.type === 'text'
@@ -2674,13 +2396,27 @@ async function handleAcpStreamingRequest(
           },
         );
 
-        if (!cancelled) {
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutTimer = setTimeout(() => {
+            didTimeout = true;
+            void worker.cancelPrompt(sessionId);
+            reject(new Error(`Request timed out after ${timeoutMs}ms.`));
+          }, timeoutMs);
+        });
+
+        const promptResponse = await Promise.race([
+          promptPromise,
+          timeoutPromise,
+        ]);
+
+        if (!cancelled && !didTimeout) {
           const usageInfo = extractUsageInfo(promptResponse);
           res.write(adapter.formatStreamEnd(model, requestId, usageInfo));
         }
         // Success — clean up and return
         req.off('aborted', abortHandler);
         res.off('close', abortHandler);
+        if (timeoutTimer) clearTimeout(timeoutTimer);
         worker.destroySession(sessionId);
         if (stopHeartbeat) stopHeartbeat();
         res.end();
@@ -2688,12 +2424,22 @@ async function handleAcpStreamingRequest(
       } catch (err) {
         req.off('aborted', abortHandler);
         res.off('close', abortHandler);
+        if (timeoutTimer) clearTimeout(timeoutTimer);
         worker.destroySession(sessionId);
 
         lastError = extractErrorMessage(err);
         logger.error(
           `[ACP] Prompt error (stream, attempt ${attempt + 1}/${maxAttempts}): ${lastError}`,
         );
+
+        if (didTimeout) {
+          if (!cancelled) {
+            res.write(adapter.formatStreamError(lastError, model, requestId));
+          }
+          if (stopHeartbeat) stopHeartbeat();
+          res.end();
+          return;
+        }
 
         // Mark credential as unhealthy on failover-eligible errors.
         // The cooldown duration comes from Google's own
@@ -2747,49 +2493,6 @@ async function handleAdaptedJsonRequest(
   state: PromptApiState,
 ) {
   return handleAcpJsonRequest(req, res, adapter, deps, state);
-  // Legacy spawn fallback kept below for reference but no longer reachable
-  const requestId = `req-${randomUUID()}`;
-  const parsed = adapter.parseRequest(req.body);
-  const model = normalizeRequestedModel(parsed.model, state);
-  const normalized: NormalizedPromptRequest = {
-    prompt: parsed.prompt,
-    systemPrompt: parsed.systemPrompt,
-    model,
-  };
-
-  const maxAttempts = state.settings.retryEnabled
-    ? Math.max(1, state.settings.retryCount + 1)
-    : 1;
-  let lastError = '';
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (attempt > 0) {
-      logger.info(
-        `[Prompt API] Retry attempt ${attempt}/${state.settings.retryCount}`,
-      );
-    }
-
-    const result = await runSingleJsonInvocation(normalized, deps, state);
-
-    if (result.exitCode === 0) {
-      return res
-        .status(200)
-        .json(
-          adapter.buildJsonResponse(result.assistantText, model, requestId),
-        );
-    }
-
-    lastError = result.didTimeout
-      ? `Request timed out after ${state.settings.timeoutMs > 0 ? state.settings.timeoutMs : deps.timeoutMs}ms.`
-      : `CLI exited with status ${String(result.exitCode)}.`;
-
-    // Don't retry on timeout
-    if (result.didTimeout) break;
-  }
-
-  return res
-    .status(500)
-    .json(adapter.buildJsonError(lastError, 500, model, requestId));
 }
 
 async function handleAdaptedStreamingRequest(
@@ -2800,75 +2503,6 @@ async function handleAdaptedStreamingRequest(
   state: PromptApiState,
 ) {
   return handleAcpStreamingRequest(req, res, adapter, deps, state);
-  // Legacy spawn fallback kept below for reference but no longer reachable
-  const requestId = `req-${randomUUID()}`;
-  const parsed = adapter.parseRequest(req.body);
-  const model = normalizeRequestedModel(parsed.model, state);
-  const normalized: NormalizedPromptRequest = {
-    prompt: parsed.prompt,
-    systemPrompt: parsed.systemPrompt,
-    model,
-  };
-
-  const invocation = await startPromptInvocation(normalized, deps, state);
-  const { child } = invocation;
-
-  res.setHeader('Content-Type', adapter.streamContentType);
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders();
-
-  let responseClosed = false;
-  let _stderrOutput = '';
-  let isFirst = true;
-
-  const abortChild = () => {
-    if (!responseClosed && !child.killed) {
-      child.kill();
-    }
-  };
-
-  req.on('aborted', abortChild);
-  res.on('close', abortChild);
-
-  child.stderr.on('data', (chunk: string) => {
-    _stderrOutput += chunk;
-  });
-
-  const stdoutDone = consumeOutputLines(child.stdout, (line) => {
-    if (line.trim().length === 0) return;
-    const event = parseStreamEvent(line);
-    if (
-      event &&
-      event.type === 'message' &&
-      event.role === 'assistant' &&
-      typeof event.content === 'string'
-    ) {
-      res.write(
-        adapter.formatStreamChunk(event.content, model, requestId, isFirst),
-      );
-      isFirst = false;
-    }
-  });
-
-  try {
-    const [exitCode] = await Promise.all([waitForChildExit(child), stdoutDone]);
-
-    if (exitCode !== 0) {
-      const message = invocation.didTimeout()
-        ? `Request timed out after ${state.settings.timeoutMs > 0 ? state.settings.timeoutMs : deps.timeoutMs}ms.`
-        : `CLI exited with status ${String(exitCode)}.`;
-      res.write(adapter.formatStreamError(message, model, requestId));
-    } else {
-      res.write(adapter.formatStreamEnd(model, requestId));
-    }
-  } finally {
-    responseClosed = true;
-    req.off('aborted', abortChild);
-    res.off('close', abortChild);
-    await invocation.cleanup();
-    res.end();
-  }
 }
 
 export function createPromptApiRouter(
@@ -2879,6 +2513,12 @@ export function createPromptApiRouter(
     workspaceRoot,
     dependencies.cliEntryPath,
   );
+  const acpPool =
+    dependencies.acpPool ??
+    new AcpProcessPool({
+      cliEntryPath,
+      spawnProcess: dependencies.spawnProcess ?? spawn,
+    });
   const deps: Required<PromptApiDependencies> = {
     spawnProcess: dependencies.spawnProcess ?? spawn,
     workspaceRoot,
@@ -2889,11 +2529,8 @@ export function createPromptApiRouter(
     credentialStoreRoot:
       dependencies.credentialStoreRoot ??
       path.join(getSourceGeminiCliHome(), GEMINI_DIR_NAME, 'prompt-api'),
+    acpPool,
   };
-  const acpPool = new AcpProcessPool({
-    cliEntryPath: deps.cliEntryPath,
-    spawnProcess: deps.spawnProcess,
-  });
   const state = createPromptApiState(deps.credentialStoreRoot, acpPool);
 
   // Pre-warm primary + failover workers in the background
@@ -2914,6 +2551,10 @@ export function createPromptApiRouter(
         maxWorkers: state.settings.maxWorkers,
         failoverWorkers: state.settings.failoverWorkers,
         keepaliveIntervalMs: state.settings.acpKeepaliveIntervalMs,
+        timeoutMs:
+          state.settings.timeoutMs > 0
+            ? state.settings.timeoutMs
+            : deps.timeoutMs,
       };
 
       // Warm up primary worker
@@ -3258,6 +2899,10 @@ export function createPromptApiRouter(
             maxWorkers: state.settings.maxWorkers,
             failoverWorkers: state.settings.failoverWorkers,
             keepaliveIntervalMs: state.settings.acpKeepaliveIntervalMs,
+            timeoutMs:
+              state.settings.timeoutMs > 0
+                ? state.settings.timeoutMs
+                : deps.timeoutMs,
           },
           credential,
         );
@@ -3774,6 +3419,10 @@ export function createPromptApiRouter(
           proxyUrl: state.settings.proxyUrl,
           maxWorkers: state.settings.maxWorkers,
           failoverWorkers: state.settings.failoverWorkers,
+          timeoutMs:
+            state.settings.timeoutMs > 0
+              ? state.settings.timeoutMs
+              : deps.timeoutMs,
         },
         cred,
       );
