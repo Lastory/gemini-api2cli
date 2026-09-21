@@ -115,7 +115,9 @@ a{color:var(--accent);text-decoration:none}
 .cred-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
 .cred-card{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;transition:border-color .15s}
 .cred-card.active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
-.cred-name{font-weight:700;font-size:15px;margin-bottom:2px}
+.cred-header{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+.cred-name{font-weight:700;font-size:15px;min-width:0;word-break:break-word}
+.cred-badges{display:flex;align-items:center;gap:4px;flex-shrink:0}
 .cred-email{color:var(--text2);font-size:13px}
 .cred-id{font-family:var(--mono);font-size:11px;color:var(--text3);margin-top:4px;word-break:break-all}
 .cred-actions{display:flex;gap:6px;margin-top:12px;flex-wrap:wrap}
@@ -126,7 +128,7 @@ a{color:var(--accent);text-decoration:none}
 .cred-cooldown-model{background:var(--amber-bg);color:var(--amber);border:1px solid rgba(245,158,11,.2)}
 .cred-cooldown-auth{background:var(--red-bg);color:var(--red);border:1px solid rgba(239,68,68,.25);font-weight:700}
 
-.badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600;white-space:nowrap}
 .badge-active{background:var(--green-bg);color:var(--green)}
 .badge-stored{background:rgba(155,163,184,.1);color:var(--text3)}
 
@@ -701,6 +703,7 @@ const I = {
     health: 'Health', cli: 'CLI', context: 'Context', model: 'Model', credential: 'Credential', acp: 'ACP',
     ok: 'OK', error: 'Error', built: 'Built', notBuilt: 'Not Built', isolated: 'Isolated', unknown: 'Unknown', none: 'None', on: 'On', off: 'Off',
     remaining: 'Remaining', numeric: 'Numeric', plan: 'Plan', credits: 'Credits', reset: 'Reset', models: 'Models',
+    credType: 'Credential Type', authMode: 'Auth Mode', region: 'Region', serviceTier: 'Service Tier', projectId: 'Project ID', status: 'Status',
     modelQuotas: 'Per-Model Quotas', modelQuotasEmpty: 'No per-model data.',
     statusOk: 'OK', statusNotLoggedIn: 'Not Logged In', statusError: 'Error',
     tokenMgmt: 'Token Management',
@@ -877,7 +880,7 @@ const I = {
     apiEndpointsDesc: '所有接口需要 <code style="color:var(--accent)">Authorization: Bearer &lt;token&gt;</code> 请求头。',
     noCreds: '暂无凭据。请先发起登录流程。',
     noQuota: '暂无额度数据。请先添加凭据。',
-    active: '当前使用',
+    active: '使用中',
     stored: '已存储',
     setActive: '设为当前',
     viewQuota: '查看额度',
@@ -896,6 +899,7 @@ const I = {
     health: '健康状态', cli: 'CLI', context: '上下文', model: '模型', credential: '凭据', acp: 'ACP',
     ok: '正常', error: '异常', built: '已构建', notBuilt: '未构建', isolated: '隔离', unknown: '未知', none: '无', on: '已启用', off: '已关闭',
     remaining: '剩余比例', numeric: '数值额度', plan: '套餐', credits: '积分', reset: '重置时间', models: '模型数',
+    credType: '凭证类型', authMode: '凭证模式', region: '地区', serviceTier: '服务层级', projectId: '项目ID', status: '状态',
     modelQuotas: '各模型配额', modelQuotasEmpty: '暂无各模型数据。',
     statusOk: '正常', statusNotLoggedIn: '未登录', statusError: '错误',
     tokenMgmt: '密钥管理',
@@ -1434,8 +1438,8 @@ function renderCreds(payload) {
   $('cred-list').innerHTML = S.credentials.map(c => {
     const isVertex = c.type === 'vertex-ai';
     const typeBadge = isVertex
-      ? '<span class="badge" style="background:#0284c7;color:#fff;margin-right:4px">Vertex AI</span>'
-      : '<span class="badge" style="background:var(--bg3);color:var(--text2);margin-right:4px">OAuth</span>';
+      ? '<span class="badge" style="background:#0284c7;color:#fff">Vertex</span>'
+      : '<span class="badge" style="background:var(--bg3);color:var(--text2)">OAuth</span>';
     const badge = c.isCurrent
       ? '<span class="badge badge-active">'+esc(t('active'))+'</span>'
       : '<span class="badge badge-stored">'+esc(t('stored'))+'</span>';
@@ -1443,24 +1447,23 @@ function renderCreds(payload) {
     let subtitle = '';
     if (isVertex) {
       const parts = [];
-      if (c.project) parts.push('Project: ' + esc(c.project));
-      if (c.location) parts.push('Region: ' + esc(c.location));
-      if (c.serviceTier) parts.push('Tier: ' + esc(c.serviceTier.toUpperCase()));
-      if (c.hasServiceAccount) parts.push('[SA Key]');
-      if (c.hasApiKey) parts.push('[API Key]');
+      if (c.hasServiceAccount) parts.push('SA Key');
+      else if (c.hasApiKey) parts.push('API Key');
+      if (c.location) parts.push(esc(c.location));
+      if (c.serviceTier) parts.push(esc(c.serviceTier.toUpperCase()));
       if (c.baseUrl) parts.push('Custom URL');
-      subtitle = parts.join(' | ') || 'Vertex AI';
+      subtitle = parts.join(' | ') || 'Vertex';
     } else {
       subtitle = c.email ? esc(c.email) : esc(t('notLoggedIn'));
     }
 
     return '<div class="cred-card'+(c.isCurrent?' active':'')+'">'+
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start">'+
-        '<div><div class="cred-name">'+esc(c.label)+'</div>'+
-        '<div class="cred-email">'+subtitle+'</div>'+
-        '<div class="cred-id">'+esc(c.id)+'</div></div>'+
-        '<div style="display:flex;align-items:center;gap:4px">'+typeBadge+badge+'</div>'+
+      '<div class="cred-header">'+
+        '<div class="cred-name">'+esc(c.label)+'</div>'+
+        '<div class="cred-badges">'+typeBadge+badge+'</div>'+
       '</div>'+
+      '<div class="cred-email">'+subtitle+'</div>'+
+      '<div class="cred-id">'+esc(c.id)+'</div>'+
       renderCredCooldowns(c.cooldowns)+
       '<div class="cred-actions">'+
         '<button class="btn btn-ghost btn-sm" data-a="switch" data-id="'+esc(c.id)+'">'+esc(t('setActive'))+'</button>'+
@@ -1487,21 +1490,21 @@ function renderQuotas(payload) {
       const statusBadge = e.status === 'ok'
         ? '<span class="badge badge-active">'+esc(t('statusOk'))+'</span>'
         : '<span class="badge badge-stored">'+esc(localeStatus(e.status))+'</span>';
-      const credDesc = 'Vertex AI | Project: ' + (e.credential.project || '--') + ' | Region: ' + (e.credential.location || '--');
       const authMode = e.credential.hasServiceAccount ? 'Service Account' : (e.credential.hasApiKey ? 'API Key' : 'ADC');
+      const serviceTier = e.credential.serviceTier ? e.credential.serviceTier.toUpperCase() : '--';
       return '<div class="quota-card">'+
         '<div style="display:flex;justify-content:space-between;align-items:flex-start">'+
           '<div><strong>'+esc(e.credential.label)+'</strong>'+
-          '<div style="color:var(--text3);font-size:12px">'+esc(credDesc)+'</div></div>'+
+          '<div style="color:var(--text3);font-size:12px">'+esc(e.credential.id)+'</div></div>'+
           statusBadge+
         '</div>'+
-        '<div class="metric-grid" style="margin-top:8px">'+
-          metric('Auth Type', 'Vertex AI')+
-          metric('Project', e.credential.project || '--')+
-          metric('Region', e.credential.location || '--')+
-          metric('Auth Mode', authMode)+
-          metric('Quota / Billing', 'GCP Console')+
-          metric('Status', 'Active')+
+        '<div class="metric-grid">'+
+          metric(t('credType'), 'Vertex')+
+          metric(t('authMode'), authMode)+
+          metric(t('region'), e.credential.location || '--')+
+          metric(t('serviceTier'), serviceTier)+
+          metric(t('projectId'), e.credential.project || '--')+
+          metric(t('status'), localeStatus(e.status))+
         '</div>'+
         (e.error?'<div style="margin-top:8px;color:var(--red);font-size:12px">'+esc(e.error)+'</div>':'')+
       '</div>';
@@ -1520,6 +1523,7 @@ function renderQuotas(payload) {
         statusBadge+
       '</div>'+
       '<div class="metric-grid">'+
+        metric(t('credType'), 'OAuth')+
         metric(t('remaining'), fmtFraction(tot))+
         metric(t('numeric'), fmtCount(tot))+
         metric(t('plan'), plan)+

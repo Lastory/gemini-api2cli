@@ -332,6 +332,46 @@ function getTimeoutMs(explicitTimeoutMs?: number): number {
   return DEFAULT_TIMEOUT_MS;
 }
 
+function parseBooleanEnv(
+  value: string | undefined,
+  defaultValue: boolean,
+): boolean {
+  if (value === undefined || value.trim() === '') {
+    return defaultValue;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (['false', '0', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+  if (['true', '1', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  return defaultValue;
+}
+
+function parseIntegerEnv(
+  value: string | undefined,
+  defaultValue: number,
+  min?: number,
+  max?: number,
+): number {
+  if (value === undefined || value.trim() === '') {
+    return defaultValue;
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    return defaultValue;
+  }
+  let result = Math.floor(n);
+  if (min !== undefined) {
+    result = Math.max(min, result);
+  }
+  if (max !== undefined) {
+    result = Math.min(max, result);
+  }
+  return result;
+}
+
 function getCliEntryPath(workspaceRoot: string, cliEntryPath?: string): string {
   if (cliEntryPath) {
     return cliEntryPath;
@@ -474,9 +514,22 @@ function createPromptApiState(
     credentialStore: new PromptCredentialStore(credentialStoreRoot),
     loginJobs: new Map(),
     settings: {
-      rotationEnabled: true,
-      retryEnabled: true,
-      retryCount: 3,
+      rotationEnabled: parseBooleanEnv(
+        process.env['GEMINI_PROMPT_API_ROTATION_ENABLED'] ??
+          process.env['GEMINI_PROMPT_API_ROTATION'],
+        true,
+      ),
+      retryEnabled: parseBooleanEnv(
+        process.env['GEMINI_PROMPT_API_RETRY_ENABLED'] ??
+          process.env['GEMINI_PROMPT_API_RETRY'],
+        true,
+      ),
+      retryCount: parseIntegerEnv(
+        process.env['GEMINI_PROMPT_API_RETRY_COUNT'],
+        3,
+        1,
+        10,
+      ),
       timeoutMs: 0,
       mcpEnabled: false,
       extensionsEnabled: false,

@@ -23,7 +23,7 @@ import { PassThrough } from 'node:stream';
 import express from 'express';
 import { OAuth2Client } from 'google-auth-library';
 import request from 'supertest';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createPromptApiRouter,
   PROMPT_API_OPENAI_COMPLETIONS_ROUTE,
@@ -820,5 +820,94 @@ describe('Prompt API routes', () => {
     // Last line should contain the error
     const lastChunk = JSON.parse(lines[lines.length - 1].replace('data: ', ''));
     expect(lastChunk.choices[0].delta.content).toContain('Error');
+  });
+
+  describe('Settings preconfiguration via environment variables', () => {
+    let workspaceRoot: string;
+    let credentialStoreRoot: string;
+    let fakeCliEntry: string;
+
+    beforeEach(() => {
+      workspaceRoot = mkdtempSync(
+        path.join(tmpdir(), 'gemini-prompt-api-workspace-'),
+      );
+      tempDirs.push(workspaceRoot);
+      credentialStoreRoot = mkdtempSync(
+        path.join(tmpdir(), 'gemini-prompt-api-credentials-'),
+      );
+      tempDirs.push(credentialStoreRoot);
+      fakeCliEntry = path.join(workspaceRoot, 'fake-cli.js');
+      writeFileSync(fakeCliEntry, '// fake cli entry\n');
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('uses default settings when env variables are not provided', async () => {
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+      });
+
+      const res = await request(app).get('/v1/settings');
+      expect(res.status).toBe(200);
+      expect(res.body.settings.rotationEnabled).toBe(true);
+      expect(res.body.settings.retryEnabled).toBe(true);
+      expect(res.body.settings.retryCount).toBe(3);
+    });
+
+    it('applies rotation, retry, and retry count overrides from env variables', async () => {
+      vi.stubEnv('GEMINI_PROMPT_API_ROTATION_ENABLED', 'false');
+      vi.stubEnv('GEMINI_PROMPT_API_RETRY_ENABLED', '0');
+      vi.stubEnv('GEMINI_PROMPT_API_RETRY_COUNT', '5');
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+      });
+
+      const res = await request(app).get('/v1/settings');
+      expect(res.status).toBe(200);
+      expect(res.body.settings.rotationEnabled).toBe(false);
+      expect(res.body.settings.retryEnabled).toBe(false);
+      expect(res.body.settings.retryCount).toBe(5);
+    });
+
+    it('clamps retryCount between 1 and 10 and handles invalid inputs gracefully', async () => {
+      vi.stubEnv('GEMINI_PROMPT_API_RETRY_COUNT', '0');
+
+      const appMin = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+      });
+
+      const resMin = await request(appMin).get('/v1/settings');
+      expect(resMin.status).toBe(200);
+      expect(resMin.body.settings.retryCount).toBe(1);
+
+      vi.stubEnv('GEMINI_PROMPT_API_RETRY_COUNT', '99');
+      const appMax = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+      });
+      const resMax = await request(appMax).get('/v1/settings');
+      expect(resMax.status).toBe(200);
+      expect(resMax.body.settings.retryCount).toBe(10);
+
+      vi.stubEnv('GEMINI_PROMPT_API_RETRY_COUNT', 'invalid');
+      const appInvalid = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+      });
+      const resInvalid = await request(appInvalid).get('/v1/settings');
+      expect(resInvalid.status).toBe(200);
+      expect(resInvalid.body.settings.retryCount).toBe(3);
+    });
   });
 });
