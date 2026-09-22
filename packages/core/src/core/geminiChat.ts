@@ -57,7 +57,6 @@ import {
   ensureStableToolIds,
 } from '../utils/sessionUtils.js';
 import { BINARY_INJECTION_KEY } from '../utils/generateContentResponseUtilities.js';
-import { writeToStderr } from '../utils/stdio.js';
 import type { ModelConfigKey } from '../services/modelConfigService.js';
 import { estimateTokenCountSync } from '../utils/tokenCalculation.js';
 import {
@@ -877,12 +876,6 @@ export class GeminiChat {
 
       const finalContents = stripToolCallIdPrefixes(contentsToUse);
 
-      // [a2a-server-patch] BEGIN: Debug log 2 - actual config sent to endpoint (using writeToStderr)
-      writeToStderr(
-        `[DEBUG 2: SENDING TO ENDPOINT] model=${modelToUse} | maxOutputTokens=${String(config.maxOutputTokens)} | thinkingConfig=${JSON.stringify(config.thinkingConfig)} | temperature=${String(config.temperature)} | topP=${String(config.topP)} | topK=${String(config.topK)} | override=${JSON.stringify(this.generationConfigOverride)}\n`,
-      );
-      // [a2a-server-patch] END: Debug log 2
-
       return this.context.config.getContentGenerator().generateContentStream(
         {
           model: modelToUse,
@@ -924,11 +917,6 @@ export class GeminiChat {
         availabilityMaxAttempts ?? this.context.config.getMaxAttempts(),
       getAvailabilityContext,
       onRetry: (attempt, error, delayMs) => {
-        // [a2a-server-patch] BEGIN: Surface retry reason to stderr for operator visibility
-        writeToStderr(
-          `[DEBUG 2: RETRY] Attempt ${attempt} failed: ${error instanceof Error ? error.message : String(error)}. Retrying in ${Math.round(delayMs)}ms...\n`,
-        );
-        // [a2a-server-patch] END: Surface retry reason to stderr
         coreEvents.emitRetryAttempt({
           attempt,
           maxAttempts:
