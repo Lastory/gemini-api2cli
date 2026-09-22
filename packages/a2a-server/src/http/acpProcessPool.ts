@@ -575,6 +575,7 @@ export class AcpWorker {
     sessionId: string,
     contentBlocks: ContentBlock[],
     onUpdate: (update: SessionNotification) => void,
+    meta?: Record<string, unknown>,
   ): Promise<acp.PromptResponse> {
     if (this._state !== 'ready' || !this.connection) {
       throw new Error('ACP worker not ready');
@@ -693,6 +694,7 @@ export class AcpWorker {
       this.connection!.prompt({
         sessionId,
         prompt: contentBlocks,
+        ...(meta ? { _meta: meta } : {}),
       })
         .then((response: acp.PromptResponse) => {
           this.promptListeners.delete(sessionId);

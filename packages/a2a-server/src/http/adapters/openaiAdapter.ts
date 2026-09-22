@@ -7,6 +7,7 @@
 import type {
   FormatAdapter,
   NormalizedPromptRequest,
+  NormalizedGenerationConfig,
   OpenAIRequestBody,
   OpenAIResponse,
   OpenAIStreamResponse,
@@ -140,7 +141,80 @@ export class OpenAIAdapter implements FormatAdapter {
       model = b.model;
     }
 
-    return { prompt, systemPrompt, model };
+    // Generation configuration (max_tokens / max_completion_tokens, reasoning_effort -> thinkingLevel, temperature, top_p)
+    let generationConfig: NormalizedGenerationConfig | undefined;
+
+    const rawMaxTokens = b.max_completion_tokens ?? b.max_tokens;
+    const maxOutputTokens =
+      typeof rawMaxTokens === 'number' &&
+      Number.isFinite(rawMaxTokens) &&
+      rawMaxTokens > 0
+        ? Math.floor(rawMaxTokens)
+        : undefined;
+
+    let thinkingConfig:
+      | NormalizedGenerationConfig['thinkingConfig']
+      | undefined;
+    if (
+      typeof b.reasoning_effort === 'string' &&
+      b.reasoning_effort.trim().length > 0
+    ) {
+      const effort = b.reasoning_effort.trim().toLowerCase();
+      let thinkingLevel: string | undefined;
+      switch (effort) {
+        case 'low':
+          thinkingLevel = 'LOW';
+          break;
+        case 'high':
+          thinkingLevel = 'HIGH';
+          break;
+        case 'medium':
+          thinkingLevel = 'MEDIUM';
+          break;
+        case 'minimal':
+          thinkingLevel = 'MINIMAL';
+          break;
+        default:
+          thinkingLevel = effort.toUpperCase();
+      }
+      thinkingConfig = {
+        thinkingLevel,
+        includeThoughts: true,
+      };
+    }
+
+    const rawTemp = b.temperature;
+    const temperature =
+      typeof rawTemp === 'number' && Number.isFinite(rawTemp)
+        ? rawTemp
+        : undefined;
+
+    const rawTopP = b.top_p;
+    const topP =
+      typeof rawTopP === 'number' && Number.isFinite(rawTopP)
+        ? rawTopP
+        : undefined;
+
+    if (
+      maxOutputTokens !== undefined ||
+      thinkingConfig !== undefined ||
+      temperature !== undefined ||
+      topP !== undefined
+    ) {
+      generationConfig = {
+        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+        ...(thinkingConfig !== undefined ? { thinkingConfig } : {}),
+        ...(temperature !== undefined ? { temperature } : {}),
+        ...(topP !== undefined ? { topP } : {}),
+      };
+    }
+
+    return {
+      prompt,
+      systemPrompt,
+      model,
+      ...(generationConfig ? { generationConfig } : {}),
+    };
   }
 
   wantsStream(body: unknown): boolean {

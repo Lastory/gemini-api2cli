@@ -7,6 +7,7 @@
 import type {
   FormatAdapter,
   NormalizedPromptRequest,
+  NormalizedGenerationConfig,
   GeminiPart,
   GeminiContent,
   GeminiRequestBody,
@@ -38,10 +39,13 @@ function buildGeminiUsageMetadata(
   return metadata;
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
 function isGeminiPart(p: unknown): p is GeminiPart {
-  if (typeof p !== 'object' || p === null) return false;
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-  const rawText = (p as Record<string, unknown>)['text'];
+  if (!isRecord(p)) return false;
+  const rawText = p['text'];
   return typeof rawText === 'string';
 }
 
@@ -66,12 +70,7 @@ function toConversationLabel(role?: string): string {
 }
 
 function isGeminiContent(v: unknown): v is GeminiContent {
-  return (
-    typeof v === 'object' &&
-    v !== null &&
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    Array.isArray((v as Record<string, unknown>)['parts'])
-  );
+  return isRecord(v) && Array.isArray(v['parts']);
 }
 
 /**
@@ -90,7 +89,7 @@ export class GeminiAdapter implements FormatAdapter {
   readonly streamContentType = 'text/event-stream; charset=utf-8';
 
   parseRequest(body: unknown): NormalizedPromptRequest {
-    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    if (!isRecord(body)) {
       throw new BadRequestError('Request body must be a JSON object.');
     }
 
@@ -147,9 +146,8 @@ export class GeminiAdapter implements FormatAdapter {
     // Model — from generationConfig.model or top-level model
     let model: string | undefined;
     const genConfig = b.generationConfig;
-    if (typeof genConfig === 'object' && genConfig !== null) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      const configModel = (genConfig as Record<string, unknown>)['model'];
+    if (isRecord(genConfig)) {
+      const configModel = genConfig['model'];
       if (typeof configModel === 'string') {
         model = configModel;
       }
@@ -158,7 +156,90 @@ export class GeminiAdapter implements FormatAdapter {
       model = b.model;
     }
 
-    return { prompt, systemPrompt, model };
+    // Generation configuration (maxOutputTokens, thinkingConfig.thinkingLevel, temperature, etc.)
+    let generationConfig: NormalizedGenerationConfig | undefined;
+    const rawGenConfig = isRecord(b.generationConfig)
+      ? b.generationConfig
+      : undefined;
+
+    const rawMaxTokens =
+      rawGenConfig?.['maxOutputTokens'] ?? body['maxOutputTokens'];
+    const maxOutputTokens =
+      typeof rawMaxTokens === 'number' &&
+      Number.isFinite(rawMaxTokens) &&
+      rawMaxTokens > 0
+        ? Math.floor(rawMaxTokens)
+        : undefined;
+
+    const candidateThinkingConfig =
+      rawGenConfig?.['thinkingConfig'] ?? body['thinkingConfig'];
+    const rawThinkingConfig = isRecord(candidateThinkingConfig)
+      ? candidateThinkingConfig
+      : undefined;
+
+    let thinkingConfig:
+      | NormalizedGenerationConfig['thinkingConfig']
+      | undefined;
+    if (rawThinkingConfig) {
+      const rawThinkingLevel = rawThinkingConfig['thinkingLevel'];
+      const thinkingLevel =
+        typeof rawThinkingLevel === 'string' &&
+        rawThinkingLevel.trim().length > 0
+          ? rawThinkingLevel.trim().toUpperCase()
+          : undefined;
+
+      const rawIncludeThoughts = rawThinkingConfig['includeThoughts'];
+      const includeThoughts =
+        typeof rawIncludeThoughts === 'boolean' ? rawIncludeThoughts : true;
+
+      if (thinkingLevel !== undefined) {
+        thinkingConfig = {
+          thinkingLevel,
+          includeThoughts,
+        };
+      }
+    }
+
+    const rawTemp = rawGenConfig?.['temperature'] ?? body['temperature'];
+    const temperature =
+      typeof rawTemp === 'number' && Number.isFinite(rawTemp)
+        ? rawTemp
+        : undefined;
+
+    const rawTopP = rawGenConfig?.['topP'] ?? body['topP'];
+    const topP =
+      typeof rawTopP === 'number' && Number.isFinite(rawTopP)
+        ? rawTopP
+        : undefined;
+
+    const rawTopK = rawGenConfig?.['topK'] ?? body['topK'];
+    const topK =
+      typeof rawTopK === 'number' && Number.isFinite(rawTopK)
+        ? Math.floor(rawTopK)
+        : undefined;
+
+    if (
+      maxOutputTokens !== undefined ||
+      thinkingConfig !== undefined ||
+      temperature !== undefined ||
+      topP !== undefined ||
+      topK !== undefined
+    ) {
+      generationConfig = {
+        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+        ...(thinkingConfig !== undefined ? { thinkingConfig } : {}),
+        ...(temperature !== undefined ? { temperature } : {}),
+        ...(topP !== undefined ? { topP } : {}),
+        ...(topK !== undefined ? { topK } : {}),
+      };
+    }
+
+    return {
+      prompt,
+      systemPrompt,
+      model,
+      ...(generationConfig ? { generationConfig } : {}),
+    };
   }
 
   wantsStream(): boolean {

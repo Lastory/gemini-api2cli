@@ -57,6 +57,7 @@ import {
   ensureStableToolIds,
 } from '../utils/sessionUtils.js';
 import { BINARY_INJECTION_KEY } from '../utils/generateContentResponseUtilities.js';
+import { writeToStderr } from '../utils/stdio.js';
 import type { ModelConfigKey } from '../services/modelConfigService.js';
 import { estimateTokenCountSync } from '../utils/tokenCalculation.js';
 import {
@@ -275,6 +276,9 @@ export class GeminiChat {
   private lastPromptTokenCount: number;
   private callCounter = 0;
   agentHistory: AgentChatHistory;
+  // [a2a-server-patch] BEGIN: Dynamic generationConfig override (maxOutputTokens, thinkingLevel) passed from a2a-server/ACP
+  private generationConfigOverride?: Partial<GenerateContentConfig>;
+  // [a2a-server-patch] END: Dynamic generationConfig override
 
   constructor(
     readonly context: AgentLoopContext,
@@ -345,6 +349,16 @@ export class GeminiChat {
   getSystemInstruction(): string {
     return this.systemInstruction;
   }
+
+  // [a2a-server-patch] BEGIN: Setters/getters for generationConfig override from a2a-server
+  setGenerationConfigOverride(override?: Partial<GenerateContentConfig>): void {
+    this.generationConfigOverride = override;
+  }
+
+  getGenerationConfigOverride(): Partial<GenerateContentConfig> | undefined {
+    return this.generationConfigOverride;
+  }
+  // [a2a-server-patch] END: Setters/getters for generationConfig override from a2a-server
 
   /**
    * Sends a message to the model and returns the response in chunks.
@@ -756,6 +770,17 @@ export class GeminiChat {
       lastModelToUse = modelToUse;
       const config: GenerateContentConfig = {
         ...currentGenerateContentConfig,
+        // [a2a-server-patch] BEGIN: Merge generationConfig override (e.g. maxOutputTokens, thinkingConfig) onto current model config
+        ...(this.generationConfigOverride ?? {}),
+        ...(this.generationConfigOverride?.thinkingConfig
+          ? {
+              thinkingConfig: {
+                ...currentGenerateContentConfig?.thinkingConfig,
+                ...this.generationConfigOverride.thinkingConfig,
+              },
+            }
+          : {}),
+        // [a2a-server-patch] END: Merge generationConfig override
         // TODO(12622): Ensure we don't overrwrite these when they are
         // passed via config.
         systemInstruction: this.systemInstruction,
@@ -852,6 +877,12 @@ export class GeminiChat {
 
       const finalContents = stripToolCallIdPrefixes(contentsToUse);
 
+      // [a2a-server-patch] BEGIN: Debug log 2 - actual config sent to endpoint (using writeToStderr)
+      writeToStderr(
+        `[DEBUG 2: SENDING TO ENDPOINT] model=${modelToUse} | maxOutputTokens=${String(config.maxOutputTokens)} | thinkingConfig=${JSON.stringify(config.thinkingConfig)} | temperature=${String(config.temperature)} | topP=${String(config.topP)} | topK=${String(config.topK)} | override=${JSON.stringify(this.generationConfigOverride)}\n`,
+      );
+      // [a2a-server-patch] END: Debug log 2
+
       return this.context.config.getContentGenerator().generateContentStream(
         {
           model: modelToUse,
@@ -893,6 +924,11 @@ export class GeminiChat {
         availabilityMaxAttempts ?? this.context.config.getMaxAttempts(),
       getAvailabilityContext,
       onRetry: (attempt, error, delayMs) => {
+        // [a2a-server-patch] BEGIN: Surface retry reason to stderr for operator visibility
+        writeToStderr(
+          `[DEBUG 2: RETRY] Attempt ${attempt} failed: ${error instanceof Error ? error.message : String(error)}. Retrying in ${Math.round(delayMs)}ms...\n`,
+        );
+        // [a2a-server-patch] END: Surface retry reason to stderr
         coreEvents.emitRetryAttempt({
           attempt,
           maxAttempts:

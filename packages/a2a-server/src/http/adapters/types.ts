@@ -4,12 +4,22 @@
  * SPDX-License-Identifier: LicenseRef-CNC-1.0
  */
 
-/* ── Shared internal types ── */
+export interface NormalizedGenerationConfig {
+  maxOutputTokens?: number;
+  thinkingConfig?: {
+    thinkingLevel?: string;
+    includeThoughts?: boolean;
+  };
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+}
 
 export type NormalizedPromptRequest = {
   prompt: string;
   systemPrompt?: string;
   model?: string;
+  generationConfig?: NormalizedGenerationConfig;
 };
 
 export type StreamJsonEvent = {
@@ -119,7 +129,10 @@ export type OpenAIRequestBody = {
   messages?: unknown;
   stream?: unknown;
   max_tokens?: unknown;
+  max_completion_tokens?: unknown;
   temperature?: unknown;
+  top_p?: unknown;
+  reasoning_effort?: unknown;
 };
 
 export type OpenAIChoice = {

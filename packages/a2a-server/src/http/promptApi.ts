@@ -2132,6 +2132,9 @@ async function handleAcpJsonRequest(
 
       try {
         let assistantText = '';
+        const promptMeta = parsed.generationConfig
+          ? { generationConfig: parsed.generationConfig }
+          : undefined;
         const promptPromise = worker.prompt(
           sessionId,
           contentBlocks,
@@ -2145,6 +2148,7 @@ async function handleAcpJsonRequest(
 
             logger.info(`[ACP] chunk: ${JSON.stringify(update)}\n`);
           },
+          promptMeta,
         );
 
         const timeoutPromise = new Promise<never>((_, reject) => {
@@ -2390,6 +2394,9 @@ async function handleAcpStreamingRequest(
       res.on('close', abortHandler);
 
       try {
+        const promptMeta = parsed.generationConfig
+          ? { generationConfig: parsed.generationConfig }
+          : undefined;
         const promptPromise = worker.prompt(
           sessionId,
           contentBlocks,
@@ -2410,6 +2417,7 @@ async function handleAcpStreamingRequest(
               isFirst = false;
             }
           },
+          promptMeta,
         );
 
         const timeoutPromise = new Promise<never>((_, reject) => {

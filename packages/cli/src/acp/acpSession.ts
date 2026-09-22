@@ -44,6 +44,8 @@ import * as acp from '@agentclientprotocol/sdk';
 import type {
   Part,
   FunctionCall,
+  // [a2a-server-patch] Used for generationConfig overrides from ACP _meta
+  GenerateContentConfig,
   GenerateContentResponseUsageMetadata,
 } from '@google/genai';
 import type { LoadedSettings } from '../config/settings.js';
@@ -316,6 +318,24 @@ export class Session {
     this.pendingPrompt?.abort();
     const pendingSend = new AbortController();
     this.pendingPrompt = pendingSend;
+
+    // [a2a-server-patch] BEGIN: Extract generationConfig override from ACP _meta and set on chat
+    const rawMetaConfig = params._meta?.['generationConfig'];
+    const generationConfig =
+      typeof rawMetaConfig === 'object' && rawMetaConfig !== null
+        ? (rawMetaConfig as Partial<GenerateContentConfig>)
+        : undefined;
+
+    this.chat.setGenerationConfigOverride?.(generationConfig);
+    this.context.geminiClient?.setGenerationConfigOverride?.(generationConfig);
+    try {
+      this.context.geminiClient
+        ?.getChat?.()
+        ?.setGenerationConfigOverride?.(generationConfig);
+    } catch {
+      // Chat might not be initialized yet
+    }
+    // [a2a-server-patch] END: Extract generationConfig override from ACP _meta
 
     await this.context.config.waitForMcpInit();
 

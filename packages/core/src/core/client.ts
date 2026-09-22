@@ -377,6 +377,14 @@ export class GeminiClient {
     this.getChat().setSystemInstruction(systemInstruction);
   }
 
+  // [a2a-server-patch] BEGIN: Set generationConfig override on active chat from a2a-server
+  setGenerationConfigOverride(override?: Partial<GenerateContentConfig>): void {
+    if (this.chat) {
+      this.chat.setGenerationConfigOverride(override);
+    }
+  }
+  // [a2a-server-patch] END: Set generationConfig override on active chat from a2a-server
+
   async startChat(
     extraHistory?: ReadonlyArray<Content | HistoryTurn>,
     resumedSessionData?: ResumedSessionData,

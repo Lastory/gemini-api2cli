@@ -1154,4 +1154,140 @@ describe('Prompt API routes', () => {
       expect(res.body.defaultTimeoutMs).toBe(30000);
     });
   });
+
+  describe('ACP generation config forwarding', () => {
+    let workspaceRoot: string;
+    let credentialStoreRoot: string;
+    let fakeCliEntry: string;
+
+    beforeEach(() => {
+      workspaceRoot = mkdtempSync(
+        path.join(tmpdir(), 'gemini-prompt-api-workspace-'),
+      );
+      tempDirs.push(workspaceRoot);
+      credentialStoreRoot = mkdtempSync(
+        path.join(tmpdir(), 'gemini-prompt-api-credentials-'),
+      );
+      tempDirs.push(credentialStoreRoot);
+      fakeCliEntry = path.join(workspaceRoot, 'fake-cli.js');
+      writeFileSync(fakeCliEntry, '// fake cli entry\n');
+    });
+
+    it('forwards generationConfig to worker.prompt in JSON requests', async () => {
+      let capturedMeta: unknown;
+      const mockWorker = {
+        credentialId: 'default',
+        createSession: vi.fn().mockResolvedValue('session-json-cfg'),
+        setSessionModel: vi.fn().mockResolvedValue(undefined),
+        prompt: vi
+          .fn()
+          .mockImplementation((_sessionId, _blocks, onUpdate, meta) => {
+            capturedMeta = meta;
+            if (onUpdate) {
+              onUpdate({
+                update: {
+                  sessionUpdate: 'agent_message_chunk',
+                  content: { type: 'text', text: 'Hello response' },
+                },
+              });
+            }
+            return Promise.resolve({ stopReason: 'end_turn' });
+          }),
+        cancelPrompt: vi.fn(),
+        destroySession: vi.fn(),
+      };
+
+      const mockAcpPool = {
+        getOrCreate: vi.fn().mockResolvedValue(mockWorker),
+        getAnyIdleWorker: vi.fn().mockReturnValue(undefined),
+      } as unknown as AcpProcessPool;
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+        acpPool: mockAcpPool,
+      });
+
+      const response = await request(app)
+        .post(PROMPT_API_OPENAI_COMPLETIONS_ROUTE)
+        .send({
+          messages: [{ role: 'user', content: 'hello' }],
+          model: 'gemini-3.1-pro-preview',
+          max_tokens: 16000,
+          reasoning_effort: 'low',
+        });
+
+      expect(response.status).toBe(200);
+      expect(mockWorker.prompt).toHaveBeenCalled();
+      expect(capturedMeta).toEqual({
+        generationConfig: {
+          maxOutputTokens: 16000,
+          thinkingConfig: {
+            thinkingLevel: 'LOW',
+            includeThoughts: true,
+          },
+        },
+      });
+    });
+
+    it('forwards generationConfig to worker.prompt in streaming requests', async () => {
+      let capturedMeta: unknown;
+      const mockWorker = {
+        credentialId: 'default',
+        createSession: vi.fn().mockResolvedValue('session-stream-cfg'),
+        setSessionModel: vi.fn().mockResolvedValue(undefined),
+        prompt: vi
+          .fn()
+          .mockImplementation((_sessionId, _blocks, onUpdate, meta) => {
+            capturedMeta = meta;
+            if (onUpdate) {
+              onUpdate({
+                update: {
+                  sessionUpdate: 'agent_message_chunk',
+                  content: { type: 'text', text: 'Streaming chunk' },
+                },
+              });
+            }
+            return Promise.resolve({ stopReason: 'end_turn' });
+          }),
+        cancelPrompt: vi.fn(),
+        destroySession: vi.fn(),
+      };
+
+      const mockAcpPool = {
+        getOrCreate: vi.fn().mockResolvedValue(mockWorker),
+        getAnyIdleWorker: vi.fn().mockReturnValue(undefined),
+      } as unknown as AcpProcessPool;
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+        acpPool: mockAcpPool,
+      });
+
+      const response = await request(app)
+        .post(PROMPT_API_OPENAI_COMPLETIONS_ROUTE)
+        .send({
+          messages: [{ role: 'user', content: 'hello' }],
+          model: 'gemini-3.1-pro-preview',
+          max_tokens: 16000,
+          reasoning_effort: 'low',
+          stream: true,
+        });
+
+      expect(response.status).toBe(200);
+      expect(mockWorker.prompt).toHaveBeenCalled();
+      expect(capturedMeta).toEqual({
+        generationConfig: {
+          maxOutputTokens: 16000,
+          thinkingConfig: {
+            thinkingLevel: 'LOW',
+            includeThoughts: true,
+          },
+        },
+      });
+    });
+  });
 });

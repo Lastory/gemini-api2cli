@@ -103,6 +103,8 @@ describe('Session', () => {
       addHistory: vi.fn(),
       recordCompletedToolCalls: vi.fn(),
       getHistory: vi.fn().mockReturnValue([]),
+      // [a2a-server-patch] Mock method for a2a generationConfig override
+      setGenerationConfigOverride: vi.fn(),
     } as unknown as Mocked<GeminiChat>;
     mockTool = {
       kind: 'read',
@@ -326,6 +328,34 @@ describe('Session', () => {
       expect.any(String),
     );
   });
+
+  // [a2a-server-patch] BEGIN: Test for generationConfig override from ACP _meta
+  it('should apply generationConfig override from _meta onto chat', async () => {
+    const stream = createMockStream([
+      {
+        type: GeminiEventType.Content,
+        value: 'Hello',
+      },
+    ]);
+    mockSendMessageStream.mockReturnValue(stream);
+
+    await session.prompt({
+      sessionId: 'session-1',
+      prompt: [{ type: 'text', text: 'Hi' }],
+      _meta: {
+        generationConfig: {
+          maxOutputTokens: 16000,
+          thinkingConfig: { thinkingLevel: 'LOW' },
+        },
+      },
+    });
+
+    expect(mockChat.setGenerationConfigOverride).toHaveBeenCalledWith({
+      maxOutputTokens: 16000,
+      thinkingConfig: { thinkingLevel: 'LOW' },
+    });
+  });
+  // [a2a-server-patch] END: Test for generationConfig override from ACP _meta
 
   it('should handle prompt with empty response (InvalidStreamError)', async () => {
     const error = new InvalidStreamError('Empty response', 'NO_RESPONSE_TEXT');

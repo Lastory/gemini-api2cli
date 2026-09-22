@@ -398,6 +398,60 @@ describe('GeminiChat', () => {
       expect(modelTurn?.parts![0].functionCall).toBeDefined();
     });
 
+    // [a2a-server-patch] BEGIN: Unit test for generationConfigOverride injection from a2a-server
+    it('should apply generationConfigOverride to generateContentStream config', async () => {
+      const testStream = (async function* () {
+        yield {
+          candidates: [
+            {
+              finishReason: 'STOP',
+              content: {
+                role: 'model',
+                parts: [{ text: 'Response' }],
+              },
+            },
+          ],
+        } as unknown as GenerateContentResponse;
+      })();
+
+      vi.mocked(mockContentGenerator.generateContentStream).mockResolvedValue(
+        testStream,
+      );
+
+      chat.setGenerationConfigOverride({
+        maxOutputTokens: 16000,
+        thinkingConfig: {
+          thinkingLevel: ThinkingLevel.LOW,
+        },
+      });
+
+      const stream = await chat.sendMessageStream(
+        { model: 'gemini-3.1-pro-preview' },
+        'Hello',
+        'prompt-test-override',
+        new AbortController().signal,
+        LlmRole.MAIN,
+      );
+
+      for await (const _ of stream) {
+        // consume
+      }
+
+      expect(mockContentGenerator.generateContentStream).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({
+            maxOutputTokens: 16000,
+            thinkingConfig: expect.objectContaining({
+              thinkingLevel: ThinkingLevel.LOW,
+            }),
+          }),
+        }),
+        'prompt-test-override',
+        LlmRole.MAIN,
+      );
+    });
+    // [a2a-server-patch] END: Unit test for generationConfigOverride injection from a2a-server
+
     it('should fail if the stream ends with an empty part and has no finishReason', async () => {
       // 1. Mock a stream that ends with an invalid part and has no finish reason.
       const streamWithNoFinish = (async function* () {
