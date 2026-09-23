@@ -839,6 +839,10 @@ const I = {
     tierPriority: 'Priority (Latency-optimized — non-sheddable premium)',
     addVertexBtn: 'Add Vertex AI Credential',
     vertexAdded: 'Vertex AI credential added successfully.',
+    estimatedCost: 'Estimated Cost',
+    costAction: 'Cost Action',
+    resetCost: 'Reset',
+    confirmResetCost: 'Reset estimated cost to $0.0000 for this credential?',
     footerLicense1: '<strong>License:</strong> Upstream Gemini CLI code remains Apache-2.0.',
     footerLicense2: 'gemini-api2cli-specific files in this fork are marked under CNC-1.0. See LICENSING.md for the current scope.',
   },
@@ -1035,6 +1039,10 @@ const I = {
     tierPriority: 'Priority (优先加速 — 最低延时保障，75-100% 溢价)',
     addVertexBtn: '添加 Vertex AI 凭据',
     vertexAdded: 'Vertex AI 凭据添加成功。',
+    estimatedCost: '累计预估成本',
+    costAction: '成本操作',
+    resetCost: '重置',
+    confirmResetCost: '确定要重置该凭据的累计成本为 $0.0000 吗？',
     footerLicense1: '<strong>许可说明：</strong>上游 Gemini CLI 代码仍然保持 Apache-2.0。',
     footerLicense2: '这个 fork 中新增的 gemini-api2cli 特定文件标记为 CNC-1.0。当前适用范围请查看 LICENSING.md。',
   },
@@ -1505,6 +1513,8 @@ function renderQuotas(payload) {
           metric(t('serviceTier'), serviceTier)+
           metric(t('projectId'), e.credential.project || '--')+
           metric(t('status'), localeStatus(e.status))+
+          metric(t('estimatedCost'), fmtCost(e.credential?.costEstimate?.totalCostUsd))+
+          '<div class="metric"><div class="metric-label">'+esc(t('costAction'))+'</div><div class="metric-value"><button class="btn btn-sm btn-danger" style="padding:2px 8px;font-size:12px;cursor:pointer" data-a="reset-cost" data-id="'+esc(e.credential.id)+'">'+esc(t('resetCost'))+'</button></div></div>'+
         '</div>'+
         (e.error?'<div style="margin-top:8px;color:var(--red);font-size:12px">'+esc(e.error)+'</div>':'')+
       '</div>';
@@ -1608,6 +1618,13 @@ function localeStatus(s) {
   if (s==='not_logged_in') return t('statusNotLoggedIn');
   if (s==='error') return t('statusError');
   return s;
+}
+
+function fmtCost(val) {
+  if (val === undefined || val === null || typeof val !== 'number') return '$0.0000';
+  if (val === 0) return '$0.0000';
+  if (val < 0.0001) return '<$0.0001';
+  return '$' + val.toFixed(4);
 }
 
 /* ── Render: Models ── */
@@ -1871,6 +1888,28 @@ $('cred-list').onclick = e => {
     api('/v1/credentials/'+id,{method:'DELETE'}).then(()=>refreshAll()).catch(showErr);
   }
 };
+
+$('quota-list').onclick = e => {
+  const btn = e.target.closest('button[data-a]');
+  if (!btn) return;
+  const action = btn.dataset.a;
+  const id = btn.dataset.id;
+  if (!action || !id) return;
+  if (action === 'reset-cost') {
+    resetVertexCost(id);
+  }
+};
+
+async function resetVertexCost(credentialId) {
+  if (!confirm(t('confirmResetCost'))) return;
+  try {
+    setNotice('');
+    await api('/v1/credentials/' + encodeURIComponent(credentialId) + '/cost/reset', { method: 'POST' });
+    await refreshAll();
+  } catch (err) {
+    showErr(err);
+  }
+}
 
 /* ── Test a credential ──
  * mode='auth'    → POST /test         (lightweight setupUser check)

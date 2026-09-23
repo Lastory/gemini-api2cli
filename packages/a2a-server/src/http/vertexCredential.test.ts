@@ -20,6 +20,8 @@ import {
   createPromptApiRouter,
   PROMPT_API_CREDENTIALS_ROUTE,
   PROMPT_API_CREDENTIAL_VERTEX_ROUTE,
+  PROMPT_API_CREDENTIAL_COST_RESET_ROUTE,
+  PROMPT_API_CREDENTIAL_COST_ROUTE,
   PROMPT_API_QUOTA_ROUTE,
   PROMPT_API_QUOTAS_ROUTE,
   type PromptApiDependencies,
@@ -512,6 +514,145 @@ describe('Vertex AI Authentication & Credentials', () => {
         });
       expect(invalidRes.status).toBe(400);
       expect(invalidRes.body.error).toContain('Invalid "serviceTier"');
+    });
+  });
+
+  describe('PromptCredentialStore Cost Estimation Tracking', () => {
+    it('records and accumulates cost only for vertex-ai credentials', async () => {
+      const root = mkdtempSync(path.join(tmpdir(), 'vtx-cost-'));
+      tempDirs.push(root);
+      const store = new PromptCredentialStore(root);
+
+      const vtx = await store.createVertexCredential({
+        label: 'Vertex Cost Test',
+        project: 'gcp-cost-proj',
+        location: 'us-central1',
+      });
+      const oauth = await store.createCredential('OAuth Test');
+
+      // Record cost on vertex credential and ensure updatedAt does not change
+      const initialUpdatedAt = vtx.updatedAt;
+      const cost1 = await store.recordVertexCost(vtx.id, 0.0025);
+      expect(cost1).toBeDefined();
+      expect(cost1?.totalCostUsd).toBe(0.0025);
+
+      const cost2 = await store.recordVertexCost(vtx.id, 0.005);
+      expect(cost2?.totalCostUsd).toBe(0.0075);
+
+      // Verify persistence and updatedAt stability by loading from store
+      const loadedVtx = await store.getCredential(vtx.id);
+      expect(loadedVtx?.costEstimate?.totalCostUsd).toBe(0.0075);
+      expect(loadedVtx?.updatedAt).toBe(initialUpdatedAt);
+
+      // Verify listCredentials ordering is unchanged after cost recording
+      const listAfterCost = await store.listCredentials();
+      const oauthIndex = listAfterCost.findIndex((c) => c.id === oauth.id);
+      const vtxIndex = listAfterCost.findIndex((c) => c.id === vtx.id);
+      // OAuth was created after Vertex, so OAuth is ahead; recording cost must NOT push Vertex ahead
+      expect(oauthIndex).toBeLessThan(vtxIndex);
+
+      // Verify oauth credentials are not tracked
+      const oauthCost = await store.recordVertexCost(oauth.id, 0.01);
+      expect(oauthCost).toBeUndefined();
+      const loadedOauth = await store.getCredential(oauth.id);
+      expect(loadedOauth?.costEstimate).toBeUndefined();
+
+      // Reset vertex cost and ensure updatedAt remains unchanged
+      const resetResult = await store.resetVertexCost(vtx.id);
+      expect(resetResult?.totalCostUsd).toBe(0);
+
+      const reloadedVtx = await store.getCredential(vtx.id);
+      expect(reloadedVtx?.costEstimate?.totalCostUsd).toBe(0);
+      expect(reloadedVtx?.updatedAt).toBe(initialUpdatedAt);
+    });
+  });
+
+  describe('Vertex Cost Reset HTTP Endpoints', () => {
+    it('resets cumulative cost via POST /v1/credentials/:id/cost/reset and returns updated quota', async () => {
+      const workspaceRoot = mkdtempSync(path.join(tmpdir(), 'vtx-reset-ws-'));
+      tempDirs.push(workspaceRoot);
+      const credentialStoreRoot = mkdtempSync(
+        path.join(tmpdir(), 'vtx-reset-store-'),
+      );
+      tempDirs.push(credentialStoreRoot);
+
+      const fakeCliEntry = path.join(workspaceRoot, 'fake-cli.js');
+      writeFileSync(fakeCliEntry, '// fake\n');
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+        timeoutMs: 5000,
+      });
+
+      // 1. Create a Vertex credential
+      const createRes = await request(app)
+        .post(PROMPT_API_CREDENTIAL_VERTEX_ROUTE)
+        .send({
+          label: 'Reset API Test',
+          project: 'gcp-reset-proj',
+          location: 'us-central1',
+        });
+      expect(createRes.status).toBe(201);
+      const credId = createRes.body.credential.id;
+
+      // 2. Artificially add cost via store
+      const store = new PromptCredentialStore(credentialStoreRoot);
+      await store.recordVertexCost(credId, 0.12345);
+
+      // 3. Verify quota endpoint returns accumulated cost
+      const quotaBefore = await request(app).get(`/v1/quotas/${credId}`);
+      expect(quotaBefore.status).toBe(200);
+      expect(quotaBefore.body.credential.costEstimate?.totalCostUsd).toBe(
+        0.12345,
+      );
+
+      // 4. Call POST /cost/reset
+      const resetRes = await request(app).post(
+        PROMPT_API_CREDENTIAL_COST_RESET_ROUTE.replace(':credentialId', credId),
+      );
+      expect(resetRes.status).toBe(200);
+      expect(resetRes.body.success).toBe(true);
+      expect(resetRes.body.costEstimate.totalCostUsd).toBe(0);
+
+      // 5. Verify quota endpoint reflects 0 cost
+      const quotaAfter = await request(app).get(`/v1/quotas/${credId}`);
+      expect(quotaAfter.status).toBe(200);
+      expect(quotaAfter.body.credential.costEstimate?.totalCostUsd).toBe(0);
+
+      // 6. Call DELETE /cost
+      await store.recordVertexCost(credId, 0.05);
+      const deleteRes = await request(app).delete(
+        PROMPT_API_CREDENTIAL_COST_ROUTE.replace(':credentialId', credId),
+      );
+      expect(deleteRes.status).toBe(200);
+      expect(deleteRes.body.success).toBe(true);
+      expect(deleteRes.body.costEstimate.totalCostUsd).toBe(0);
+    });
+
+    it('returns 404 when resetting cost for non-existent credential', async () => {
+      const workspaceRoot = mkdtempSync(path.join(tmpdir(), 'vtx-ws-'));
+      tempDirs.push(workspaceRoot);
+      const credentialStoreRoot = mkdtempSync(
+        path.join(tmpdir(), 'vtx-store-'),
+      );
+      tempDirs.push(credentialStoreRoot);
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: path.join(workspaceRoot, 'fake.js'),
+        credentialStoreRoot,
+      });
+
+      const res = await request(app).post(
+        PROMPT_API_CREDENTIAL_COST_RESET_ROUTE.replace(
+          ':credentialId',
+          'non-existent-id',
+        ),
+      );
+      expect(res.status).toBe(404);
+      expect(res.body.error).toContain('not found');
     });
   });
 });

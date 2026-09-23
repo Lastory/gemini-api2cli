@@ -56,6 +56,7 @@ import type * as acp from '@agentclientprotocol/sdk';
 import type { FormatAdapter, UsageInfo } from './adapters/types.js';
 import { geminiAdapter } from './adapters/geminiAdapter.js';
 import { openaiAdapter } from './adapters/openaiAdapter.js';
+import { estimateVertexCost } from './vertexPricing.js';
 import { logBuffer, type LogEntry } from './logBuffer.js';
 import {
   AcpProcessPool,
@@ -83,6 +84,10 @@ export const PROMPT_API_CREDENTIAL_LOGIN_COMPLETE_ROUTE =
 export const PROMPT_API_QUOTAS_ROUTE = '/v1/quotas';
 export const PROMPT_API_QUOTA_ROUTE = '/v1/quotas/:credentialId';
 export const PROMPT_API_CREDENTIAL_VERTEX_ROUTE = '/v1/credentials/vertex';
+export const PROMPT_API_CREDENTIAL_COST_RESET_ROUTE =
+  '/v1/credentials/:credentialId/cost/reset';
+export const PROMPT_API_CREDENTIAL_COST_ROUTE =
+  '/v1/credentials/:credentialId/cost';
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const LOGIN_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -570,6 +575,9 @@ function getPromptApiCredentialPayload(
     ...(credential.apiKey ? { hasApiKey: true } : {}),
     ...(credential.baseUrl ? { baseUrl: credential.baseUrl } : {}),
     ...(credential.serviceTier ? { serviceTier: credential.serviceTier } : {}),
+    ...(credential.costEstimate
+      ? { costEstimate: credential.costEstimate }
+      : {}),
     isCurrent: credential.id === currentCredentialId,
     // Empty array (not undefined) so the UI can rely on `.length`
     // without an extra null check on every render.
@@ -1849,7 +1857,13 @@ function extractUsageInfo(
   const totalTokens = usage?.totalTokens ?? inputTokens + outputTokens;
   const cachedReadTokens =
     usage?.cachedReadTokens ?? quota?.token_count?.cached_tokens ?? null;
-  const thoughtTokens = usage?.thoughtTokens ?? null;
+  const rawThoughts =
+    typeof rawUsageMetadata?.['thoughtsTokenCount'] === 'number'
+      ? rawUsageMetadata['thoughtsTokenCount']
+      : typeof rawUsageMetadata?.['thoughts_token_count'] === 'number'
+        ? rawUsageMetadata['thoughts_token_count']
+        : null;
+  const thoughtTokens = usage?.thoughtTokens ?? rawThoughts;
 
   return {
     inputTokens,
@@ -1859,6 +1873,33 @@ function extractUsageInfo(
     thoughtTokens,
     rawUsageMetadata,
   };
+}
+
+async function trackVertexCostIfApplicable(
+  state: PromptApiState,
+  credentialId: string,
+  model: string,
+  usageInfo?: UsageInfo,
+): Promise<void> {
+  if (!usageInfo || !credentialId) return;
+  try {
+    const cred = await state.credentialStore.getCredential(credentialId);
+    if (!cred || cred.type !== 'vertex-ai') return;
+    const costResult = estimateVertexCost(model, usageInfo, cred.serviceTier);
+    if (costResult.totalCostUsd > 0) {
+      await state.credentialStore.recordVertexCost(
+        credentialId,
+        costResult.totalCostUsd,
+      );
+      logger.info(
+        `[Prompt API] Tracked Vertex cost for credential ${credentialId} (${model}): $${costResult.totalCostUsd.toFixed(6)} USD (input: $${costResult.inputCostUsd.toFixed(6)}, output: $${costResult.outputCostUsd.toFixed(6)})`,
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      `[Prompt API] Failed to track Vertex cost: ${extractErrorMessage(err)}`,
+    );
+  }
 }
 
 /* ── Credential prefetch (failover latency optimization) ── */
@@ -2059,12 +2100,14 @@ async function handleAcpJsonRequest(
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let worker: Awaited<ReturnType<typeof getAcpWorkerAndSession>>['worker'];
       let sessionId: string;
+      let activeCredentialId = '';
 
       try {
         if (attempt === 0) {
           const result = await getAcpWorkerAndSession(deps, state);
           worker = result.worker;
           sessionId = result.sessionId;
+          activeCredentialId = result.credentialId;
           triedCredentials.add(result.credentialId);
         } else {
           // Failover: prefer the prefetched session (already warmed in parallel
@@ -2095,6 +2138,7 @@ async function handleAcpJsonRequest(
           }
           worker = alt.worker;
           sessionId = alt.sessionId;
+          activeCredentialId = alt.credentialId;
           triedCredentials.add(alt.credentialId);
           logger.info(
             `[ACP] Failover attempt ${attempt + 1}: switching to credential ${alt.credentialId}${usedPrefetch ? ' (prefetched)' : ''}`,
@@ -2165,6 +2209,12 @@ async function handleAcpJsonRequest(
         ]);
 
         const usageInfo = extractUsageInfo(promptResponse);
+        void trackVertexCostIfApplicable(
+          state,
+          activeCredentialId,
+          model,
+          usageInfo,
+        );
         return res
           .status(200)
           .json(
@@ -2303,12 +2353,14 @@ async function handleAcpStreamingRequest(
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let worker: Awaited<ReturnType<typeof getAcpWorkerAndSession>>['worker'];
       let sessionId: string;
+      let activeCredentialId = '';
 
       try {
         if (attempt === 0) {
           const result = await getAcpWorkerAndSession(deps, state);
           worker = result.worker;
           sessionId = result.sessionId;
+          activeCredentialId = result.credentialId;
           triedCredentials.add(result.credentialId);
         } else {
           const prefetched = await consumePrefetch(prefetchRef);
@@ -2333,6 +2385,7 @@ async function handleAcpStreamingRequest(
           }
           worker = alt.worker;
           sessionId = alt.sessionId;
+          activeCredentialId = alt.credentialId;
           triedCredentials.add(alt.credentialId);
           logger.info(
             `[ACP] Stream failover attempt ${attempt + 1}: switching to credential ${alt.credentialId}${usedPrefetch ? ' (prefetched)' : ''}`,
@@ -2435,6 +2488,12 @@ async function handleAcpStreamingRequest(
 
         if (!cancelled && !didTimeout) {
           const usageInfo = extractUsageInfo(promptResponse);
+          void trackVertexCostIfApplicable(
+            state,
+            activeCredentialId,
+            model,
+            usageInfo,
+          );
           res.write(adapter.formatStreamEnd(model, requestId, usageInfo));
         }
         // Success — clean up and return
@@ -3710,6 +3769,30 @@ export function createPromptApiRouter(
       });
     }
   });
+
+  const resetCostHandler = async (req: Request, res: Response) => {
+    try {
+      const { credentialId } = req.params;
+      if (!credentialId) {
+        throw new BadRequestError('Credential ID is required.');
+      }
+      const costEstimate =
+        await state.credentialStore.resetVertexCost(credentialId);
+      return res.status(200).json({ success: true, costEstimate });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('not found')) {
+        return res.status(404).json({ error: error.message });
+      }
+      logPromptApiError(error);
+      return res.status(500).json({
+        error:
+          error instanceof Error ? error.message : 'Unknown prompt API error',
+      });
+    }
+  };
+
+  router.post(PROMPT_API_CREDENTIAL_COST_RESET_ROUTE, resetCostHandler);
+  router.delete(PROMPT_API_CREDENTIAL_COST_ROUTE, resetCostHandler);
 
   router.post(PROMPT_API_CREDENTIAL_LOGIN_ROUTE, async (req, res) => {
     try {

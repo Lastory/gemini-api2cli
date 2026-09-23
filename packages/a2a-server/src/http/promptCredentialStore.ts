@@ -18,6 +18,11 @@ type PromptCredentialStoreState = {
 
 export type PromptCredentialType = 'oauth' | 'vertex-ai';
 
+export interface VertexCostEstimate {
+  totalCostUsd: number;
+  lastCalculatedAt?: string;
+}
+
 export type PromptApiCredentialRecord = {
   id: string;
   type?: PromptCredentialType;
@@ -32,6 +37,7 @@ export type PromptApiCredentialRecord = {
   apiKey?: string;
   baseUrl?: string;
   serviceTier?: 'standard' | 'flex' | 'priority';
+  costEstimate?: VertexCostEstimate;
 };
 
 export interface CreateVertexCredentialParams {
@@ -205,6 +211,100 @@ export class PromptCredentialStore {
       'utf8',
     );
     return updated;
+  }
+
+  private readonly costLockChain = new Map<string, Promise<unknown>>();
+
+  private async withCredentialLock<T>(
+    credentialId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const prev = this.costLockChain.get(credentialId) ?? Promise.resolve();
+    let resolveCurrent!: () => void;
+    const current = new Promise<void>((resolve) => {
+      resolveCurrent = resolve;
+    });
+    this.costLockChain.set(credentialId, current);
+
+    try {
+      await prev;
+      return await fn();
+    } finally {
+      resolveCurrent();
+      if (this.costLockChain.get(credentialId) === current) {
+        this.costLockChain.delete(credentialId);
+      }
+    }
+  }
+
+  async recordVertexCost(
+    credentialId: string,
+    costUsd: number,
+  ): Promise<VertexCostEstimate | undefined> {
+    if (costUsd <= 0) {
+      const existing = await this.getCredential(credentialId);
+      return existing?.costEstimate;
+    }
+
+    return this.withCredentialLock(credentialId, async () => {
+      const existing = await this.getCredential(credentialId);
+      if (!existing || existing.type !== 'vertex-ai') {
+        return undefined;
+      }
+
+      const now = new Date().toISOString();
+      const currentCost = existing.costEstimate?.totalCostUsd ?? 0;
+      const newTotalCostUsd =
+        Math.round((currentCost + costUsd) * 1_000_000) / 1_000_000;
+
+      const costEstimate: VertexCostEstimate = {
+        totalCostUsd: newTotalCostUsd,
+        lastCalculatedAt: now,
+      };
+
+      const updated: PromptApiCredentialRecord = {
+        ...existing,
+        costEstimate,
+      };
+
+      await writeFile(
+        this.getCredentialMetadataPath(credentialId),
+        JSON.stringify(updated, null, 2),
+        'utf8',
+      );
+
+      return costEstimate;
+    });
+  }
+
+  async resetVertexCost(
+    credentialId: string,
+  ): Promise<VertexCostEstimate | undefined> {
+    return this.withCredentialLock(credentialId, async () => {
+      const existing = await this.getCredential(credentialId);
+      if (!existing) {
+        throw new Error(`Credential not found: ${credentialId}`);
+      }
+
+      const now = new Date().toISOString();
+      const costEstimate: VertexCostEstimate = {
+        totalCostUsd: 0,
+        lastCalculatedAt: now,
+      };
+
+      const updated: PromptApiCredentialRecord = {
+        ...existing,
+        costEstimate,
+      };
+
+      await writeFile(
+        this.getCredentialMetadataPath(credentialId),
+        JSON.stringify(updated, null, 2),
+        'utf8',
+      );
+
+      return costEstimate;
+    });
   }
 
   getCredentialHomeDir(credentialId: string): string {
