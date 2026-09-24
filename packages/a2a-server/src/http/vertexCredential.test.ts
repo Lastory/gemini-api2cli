@@ -19,7 +19,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createPromptApiRouter,
   PROMPT_API_CREDENTIALS_ROUTE,
+  PROMPT_API_CREDENTIAL_ROUTE,
   PROMPT_API_CREDENTIAL_VERTEX_ROUTE,
+  PROMPT_API_CREDENTIAL_SERVICE_TIER_ROUTE,
   PROMPT_API_CREDENTIAL_COST_RESET_ROUTE,
   PROMPT_API_CREDENTIAL_COST_ROUTE,
   PROMPT_API_QUOTA_ROUTE,
@@ -653,6 +655,161 @@ describe('Vertex AI Authentication & Credentials', () => {
       );
       expect(res.status).toBe(404);
       expect(res.body.error).toContain('not found');
+    });
+  });
+
+  describe('PromptCredentialStore Service Tier Switching', () => {
+    it('updates serviceTier on a vertex-ai credential and rejects non-vertex credentials', async () => {
+      const root = mkdtempSync(path.join(tmpdir(), 'vtx-tier-'));
+      tempDirs.push(root);
+      const store = new PromptCredentialStore(root);
+
+      const vtx = await store.createVertexCredential({
+        label: 'Tier Switch Test',
+        project: 'gcp-tier-proj',
+        location: 'us-central1',
+        serviceTier: 'standard',
+      });
+      expect(vtx.serviceTier).toBe('standard');
+
+      // Switch to flex
+      const updatedFlex = await store.updateVertexServiceTier(vtx.id, 'flex');
+      expect(updatedFlex.serviceTier).toBe('flex');
+      const loadedFlex = await store.getCredential(vtx.id);
+      expect(loadedFlex?.serviceTier).toBe('flex');
+
+      // Switch to priority
+      const updatedPri = await store.updateVertexServiceTier(
+        vtx.id,
+        'priority',
+      );
+      expect(updatedPri.serviceTier).toBe('priority');
+      const loadedPri = await store.getCredential(vtx.id);
+      expect(loadedPri?.serviceTier).toBe('priority');
+
+      // Reject non-vertex credential
+      const oauth = await store.createCredential('OAuth Tier Test');
+      await expect(
+        store.updateVertexServiceTier(oauth.id, 'flex'),
+      ).rejects.toThrow('not a Vertex AI credential');
+
+      // Reject non-existent credential
+      await expect(
+        store.updateVertexServiceTier('non-existent', 'flex'),
+      ).rejects.toThrow('Credential not found');
+    });
+
+    it('preserves listCredentials ordering by createdAt when serviceTier is updated', async () => {
+      const root = mkdtempSync(path.join(tmpdir(), 'vtx-order-'));
+      tempDirs.push(root);
+      const store = new PromptCredentialStore(root);
+
+      const first = await store.createVertexCredential({
+        label: 'First Credential',
+        project: 'gcp-first-proj',
+        location: 'us-central1',
+        serviceTier: 'standard',
+      });
+      const second = await store.createVertexCredential({
+        label: 'Second Credential',
+        project: 'gcp-second-proj',
+        location: 'us-central1',
+        serviceTier: 'standard',
+      });
+
+      const listBefore = await store.listCredentials();
+      expect(listBefore[0]?.id).toBe(second.id);
+      expect(listBefore[1]?.id).toBe(first.id);
+
+      // Update first credential's service tier (which sets updatedAt to now)
+      await store.updateVertexServiceTier(first.id, 'flex');
+
+      // Order must remain sorted by createdAt: second remains ahead of first
+      const listAfter = await store.listCredentials();
+      expect(listAfter[0]?.id).toBe(second.id);
+      expect(listAfter[1]?.id).toBe(first.id);
+    });
+  });
+
+  describe('Vertex Service Tier HTTP Endpoints', () => {
+    it('switches serviceTier via PUT /v1/credentials/:id/service-tier and PATCH /v1/credentials/:id', async () => {
+      const workspaceRoot = mkdtempSync(path.join(tmpdir(), 'vtx-tier-ws-'));
+      tempDirs.push(workspaceRoot);
+      const credentialStoreRoot = mkdtempSync(
+        path.join(tmpdir(), 'vtx-tier-store-'),
+      );
+      tempDirs.push(credentialStoreRoot);
+
+      const fakeCliEntry = path.join(workspaceRoot, 'fake-cli.js');
+      writeFileSync(fakeCliEntry, '// fake\n');
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+        timeoutMs: 5000,
+      });
+
+      // 1. Create Vertex credential with standard tier
+      const createRes = await request(app)
+        .post(PROMPT_API_CREDENTIAL_VERTEX_ROUTE)
+        .send({
+          label: 'Service Tier Switch Test',
+          project: 'gcp-tier-http-proj',
+          location: 'us-central1',
+          serviceTier: 'standard',
+        });
+      expect(createRes.status).toBe(201);
+      const credId = createRes.body.credential.id;
+      expect(createRes.body.credential.serviceTier).toBe('standard');
+
+      // 2. Switch to flex via PUT /service-tier
+      const putRes = await request(app)
+        .put(
+          PROMPT_API_CREDENTIAL_SERVICE_TIER_ROUTE.replace(
+            ':credentialId',
+            credId,
+          ),
+        )
+        .send({ serviceTier: 'flex' });
+      expect(putRes.status).toBe(200);
+      expect(putRes.body.credential.serviceTier).toBe('flex');
+
+      // Verify quota reflects updated tier
+      const quotaRes1 = await request(app).get(`/v1/quotas/${credId}`);
+      expect(quotaRes1.status).toBe(200);
+      expect(quotaRes1.body.credential.serviceTier).toBe('flex');
+
+      // 3. Switch to priority via PATCH /v1/credentials/:id
+      const patchRes = await request(app)
+        .patch(PROMPT_API_CREDENTIAL_ROUTE.replace(':credentialId', credId))
+        .send({ serviceTier: 'priority' });
+      expect(patchRes.status).toBe(200);
+      expect(patchRes.body.credential.serviceTier).toBe('priority');
+
+      // 4. Reject invalid tier
+      const invalidRes = await request(app)
+        .put(
+          PROMPT_API_CREDENTIAL_SERVICE_TIER_ROUTE.replace(
+            ':credentialId',
+            credId,
+          ),
+        )
+        .send({ serviceTier: 'invalid-tier' });
+      expect(invalidRes.status).toBe(400);
+      expect(invalidRes.body.error).toContain('Invalid "serviceTier"');
+
+      // 5. Reject non-existent credential
+      const notFoundRes = await request(app)
+        .put(
+          PROMPT_API_CREDENTIAL_SERVICE_TIER_ROUTE.replace(
+            ':credentialId',
+            'no-such-cred',
+          ),
+        )
+        .send({ serviceTier: 'flex' });
+      expect(notFoundRes.status).toBe(404);
+      expect(notFoundRes.body.error).toContain('not found');
     });
   });
 });

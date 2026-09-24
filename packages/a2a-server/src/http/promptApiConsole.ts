@@ -283,6 +283,21 @@ a{color:var(--accent);text-decoration:none}
 .comp-box.latest-box{border-left:3px solid var(--accent)}
 .comp-box.empty-box{color:var(--text3);font-style:italic;padding:8px 12px}
 .comp-meta-req{font-size:11px;color:var(--text3);font-family:var(--mono);display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+
+/* ── Modal Overlay ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:999;padding:16px}
+.modal-box{width:100%;max-width:440px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;box-shadow:var(--shadow);animation:modalIn .15s ease-out}
+@keyframes modalIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
+
+/* ── Tier Choices ── */
+.tier-choices{display:flex;flex-direction:column;gap:8px}
+.tier-choice-btn{display:flex;flex-direction:column;align-items:flex-start;text-align:left;width:100%;padding:11px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);cursor:pointer;transition:all .15s}
+.tier-choice-btn:hover{border-color:var(--accent);background:var(--surface3);transform:translateY(-1px)}
+.tier-choice-btn.active{border-color:var(--accent);background:var(--accent-glow);box-shadow:0 0 0 1px var(--accent)}
+.tier-choice-header{display:flex;justify-content:space-between;align-items:center;width:100%;margin-bottom:3px}
+.tier-choice-title{font-weight:700;font-size:14px;color:var(--text)}
+.tier-choice-desc{font-size:12px;color:var(--text3);line-height:1.4}
+.tier-choice-badge{font-size:11px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--green-bg);color:var(--green)}
 </style>
 </head>
 <body>
@@ -403,8 +418,8 @@ a{color:var(--accent);text-decoration:none}
       <div class="field">
         <span class="label" id="t-vertex-service-tier">Service Tier (Latency & Cost)</span>
         <select id="vertex-service-tier" class="input">
-          <option id="opt-tier-standard" value="standard">Standard (Default — standard price & latency)</option>
           <option id="opt-tier-flex" value="flex">Flex (Cost-optimized — 50% discount, sheddable)</option>
+          <option id="opt-tier-standard" value="standard" selected>Standard (Default — standard price & latency)</option>
           <option id="opt-tier-priority" value="priority">Priority (Latency-optimized — non-sheddable premium)</option>
         </select>
       </div>
@@ -672,6 +687,43 @@ a{color:var(--accent);text-decoration:none}
 
 </div>
 
+<!-- Service Tier Modal -->
+<div id="tier-modal" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div class="card-title" id="t-tier-modal-title" style="margin-bottom:0">更改服务层级</div>
+      <button class="btn btn-outline btn-sm" id="tier-modal-close" style="padding:2px 7px;font-size:14px;border:none;cursor:pointer">✕</button>
+    </div>
+    <div style="font-size:13px;color:var(--text3);margin-bottom:12px" id="t-tier-modal-desc">点击以下任一层级即可直接切换：</div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:14px;padding:8px 12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">
+      <span style="color:var(--text3)" id="t-tier-modal-cred-label">凭据：</span><strong id="tier-modal-cred-name" style="color:var(--text)"></strong>
+    </div>
+    <div class="tier-choices" id="tier-choices">
+      <button type="button" class="tier-choice-btn" data-tier="flex" id="tier-btn-flex">
+        <div class="tier-choice-header">
+          <span class="tier-choice-title">Flex</span>
+          <span class="tier-choice-badge" id="tier-badge-flex" style="display:none">当前</span>
+        </div>
+        <div class="tier-choice-desc" id="t-tier-desc-flex">成本优先 — 50% 折扣，闲时算力/高延迟</div>
+      </button>
+      <button type="button" class="tier-choice-btn" data-tier="standard" id="tier-btn-standard">
+        <div class="tier-choice-header">
+          <span class="tier-choice-title">Standard</span>
+          <span class="tier-choice-badge" id="tier-badge-standard" style="display:none">当前</span>
+        </div>
+        <div class="tier-choice-desc" id="t-tier-desc-standard">默认 — 基准价格与常规响应</div>
+      </button>
+      <button type="button" class="tier-choice-btn" data-tier="priority" id="tier-btn-priority">
+        <div class="tier-choice-header">
+          <span class="tier-choice-title">Priority</span>
+          <span class="tier-choice-badge" id="tier-badge-priority" style="display:none">当前</span>
+        </div>
+        <div class="tier-choice-desc" id="t-tier-desc-priority">优先加速 — 最低延时保障，75-100% 溢价</div>
+      </button>
+    </div>
+  </div>
+</div>
+
 <script>
 const TOKEN_KEY = 'gemini_prompt_api_token';
 const LANG_KEY = 'gemini_prompt_api_lang';
@@ -915,6 +967,17 @@ const I = {
     costAction: 'Cost Action',
     resetCost: 'Reset',
     confirmResetCost: 'Reset estimated cost to $0.0000 for this credential?',
+    changeTier: 'Change',
+    tierModalTitle: 'Change Service Tier',
+    tierModalDesc: 'Click an option below to switch directly:',
+    tierModalCredLabel: 'Credential: ',
+    tierUpdated: 'Service tier updated.',
+    currentTierBadge: 'Active',
+    switchingTier: 'Switching...',
+    tierDescStandard: 'Default — standard price & latency',
+    tierDescFlex: 'Cost-optimized — 50% discount, sheddable',
+    tierDescPriority: 'Latency-optimized — non-sheddable premium',
+    epServiceTier: 'Update Vertex AI credential service tier ("standard", "flex", "priority"). Body: {"serviceTier":"..."}',
     footerLicense1: '<strong>License:</strong> Upstream Gemini CLI code remains Apache-2.0.',
     footerLicense2: 'gemini-api2cli-specific files in this fork are marked under CNC-1.0. See LICENSING.md for the current scope.',
   },
@@ -1140,6 +1203,17 @@ const I = {
     costAction: '成本操作',
     resetCost: '重置',
     confirmResetCost: '确定要重置该凭据的累计成本为 $0.0000 吗？',
+    changeTier: '更改',
+    tierModalTitle: '更改服务层级',
+    tierModalDesc: '点击以下任一层级即可直接切换：',
+    tierModalCredLabel: '凭据：',
+    tierUpdated: '服务层级已更改。',
+    currentTierBadge: '当前',
+    switchingTier: '切换中...',
+    tierDescStandard: '默认 — 基准价格与常规响应',
+    tierDescFlex: '成本优先 — 50% 折扣，闲时算力/高延迟',
+    tierDescPriority: '优先加速 — 最低延时保障，75-100% 溢价',
+    epServiceTier: '更新 Vertex AI 凭据的服务层级（"standard"、"flex"、"priority"）。Body: {"serviceTier":"..."}',
     footerLicense1: '<strong>许可说明：</strong>上游 Gemini CLI 代码仍然保持 Apache-2.0。',
     footerLicense2: '这个 fork 中新增的 gemini-api2cli 特定文件标记为 CNC-1.0。当前适用范围请查看 LICENSING.md。',
   },
@@ -1316,6 +1390,23 @@ function applyLang() {
   if (refreshCompBtn) refreshCompBtn.textContent = t('refresh');
   const clearCompBtn = $('clear-comp-btn');
   if (clearCompBtn) clearCompBtn.textContent = t('compClearBtn');
+  // Tier Modal
+  const tierTitle = $('t-tier-modal-title');
+  if (tierTitle) tierTitle.textContent = t('tierModalTitle');
+  const tierDesc = $('t-tier-modal-desc');
+  if (tierDesc) tierDesc.textContent = t('tierModalDesc');
+  const tierCredL = $('t-tier-modal-cred-label');
+  if (tierCredL) tierCredL.textContent = t('tierModalCredLabel');
+  const tierDescStd = $('t-tier-desc-standard');
+  if (tierDescStd) tierDescStd.textContent = t('tierDescStandard');
+  const tierDescFlex = $('t-tier-desc-flex');
+  if (tierDescFlex) tierDescFlex.textContent = t('tierDescFlex');
+  const tierDescPri = $('t-tier-desc-priority');
+  if (tierDescPri) tierDescPri.textContent = t('tierDescPriority');
+  ['flex', 'standard', 'priority'].forEach(tier => {
+    const badge = $('tier-badge-' + tier);
+    if (badge) badge.textContent = t('currentTierBadge');
+  });
   // Footer
   $('footer-license-1').innerHTML = t('footerLicense1');
   $('footer-license-2').textContent = t('footerLicense2');
@@ -1612,7 +1703,9 @@ function renderQuotas(payload) {
         ? '<span class="badge badge-active">'+esc(t('statusOk'))+'</span>'
         : '<span class="badge badge-stored">'+esc(localeStatus(e.status))+'</span>';
       const authMode = e.credential.hasServiceAccount ? 'Service Account' : (e.credential.hasApiKey ? 'API Key' : 'ADC');
-      const serviceTier = e.credential.serviceTier ? e.credential.serviceTier.toUpperCase() : '--';
+      const currentTier = (e.credential.serviceTier || 'standard').toLowerCase();
+      const serviceTier = (e.credential.serviceTier || 'standard').toUpperCase();
+      const costStr = fmtCost(e.credential?.costEstimate?.totalCostUsd);
       return '<div class="quota-card">'+
         '<div style="display:flex;justify-content:space-between;align-items:flex-start">'+
           '<div><strong>'+esc(e.credential.label)+'</strong>'+
@@ -1623,11 +1716,22 @@ function renderQuotas(payload) {
           metric(t('credType'), 'Vertex')+
           metric(t('authMode'), authMode)+
           metric(t('region'), e.credential.location || '--')+
-          metric(t('serviceTier'), serviceTier)+
+          '<div class="metric">'+
+            '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px">'+
+              '<div class="metric-label">'+esc(t('serviceTier'))+'</div>'+
+              '<button class="btn btn-sm btn-ghost" style="padding:2px 8px;font-size:11px;cursor:pointer;line-height:1.2" data-a="change-tier" data-id="'+esc(e.credential.id)+'" data-tier="'+esc(currentTier)+'" data-label="'+esc(e.credential.label)+'">'+esc(t('changeTier'))+'</button>'+
+            '</div>'+
+            '<div class="metric-value" style="'+(serviceTier.length>10?'font-size:14px':'')+'">'+esc(serviceTier)+'</div>'+
+          '</div>'+
           metric(t('projectId'), e.credential.project || '--')+
           metric(t('status'), localeStatus(e.status))+
-          metric(t('estimatedCost'), fmtCost(e.credential?.costEstimate?.totalCostUsd))+
-          '<div class="metric"><div class="metric-label">'+esc(t('costAction'))+'</div><div class="metric-value"><button class="btn btn-sm btn-danger" style="padding:2px 8px;font-size:12px;cursor:pointer" data-a="reset-cost" data-id="'+esc(e.credential.id)+'">'+esc(t('resetCost'))+'</button></div></div>'+
+          '<div class="metric">'+
+            '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px">'+
+              '<div class="metric-label">'+esc(t('estimatedCost'))+'</div>'+
+              '<button class="btn btn-sm btn-danger" style="padding:2px 8px;font-size:11px;cursor:pointer;line-height:1.2" data-a="reset-cost" data-id="'+esc(e.credential.id)+'">'+esc(t('resetCost'))+'</button>'+
+            '</div>'+
+            '<div class="metric-value" style="'+(costStr.length>10?'font-size:14px':'')+'">'+esc(costStr)+'</div>'+
+          '</div>'+
         '</div>'+
         (e.error?'<div style="margin-top:8px;color:var(--red);font-size:12px">'+esc(e.error)+'</div>':'')+
       '</div>';
@@ -1770,6 +1874,7 @@ function renderEndpoints() {
     ['GET','/v1/credentials/login/:id',t('epLoginStatus')],
     ['POST','/v1/credentials/login/:id/complete',t('epLoginComplete')],
     ['POST','/v1/credentials/vertex',t('epVertex')],
+    ['PUT','/v1/credentials/:id/service-tier',t('epServiceTier')],
     ['GET','/v1/quotas',t('epQuotas')],
     ['GET','/v1/quotas/:credentialId',t('epQuota')],
     ['GET','/v1/health',t('epHealth')],
@@ -1794,9 +1899,22 @@ async function refreshHealth() {
   renderCreds(creds);
 }
 
-async function refreshQuotas() {
-  setNotice('');
-  renderQuotas(await api('/v1/quotas'));
+let isRefreshingQuotas = false;
+let lastQuotasFetchedAt = 0;
+
+async function refreshQuotas(clearNotice = false) {
+  if (clearNotice) setNotice('');
+  if (isRefreshingQuotas) return;
+  isRefreshingQuotas = true;
+  try {
+    const payload = await api('/v1/quotas');
+    lastQuotasFetchedAt = Date.now();
+    renderQuotas(payload);
+  } catch (e) {
+    if (clearNotice) showErr(e);
+  } finally {
+    isRefreshingQuotas = false;
+  }
 }
 
 async function refreshInputComparison() {
@@ -1918,13 +2036,13 @@ function renderInputComparison(data) {
 }
 
 async function refreshAll() {
-  await Promise.all([refreshHealth(), refreshQuotas(), refreshInputComparison()]);
+  await Promise.all([refreshHealth(), refreshQuotas(false), refreshInputComparison()]);
 }
 
 /* ── Actions ── */
 $('refresh-all-btn').onclick = () => refreshAll().catch(showErr);
 $('refresh-creds-btn').onclick = () => refreshHealth().catch(showErr);
-$('refresh-quotas-btn').onclick = () => refreshQuotas().catch(showErr);
+$('refresh-quotas-btn').onclick = () => refreshQuotas(true).catch(showErr);
 $('refresh-comp-btn').onclick = () => refreshInputComparison().catch(showErr);
 $('clear-comp-btn').onclick = () => clearInputComparison().catch(showErr);
 
@@ -2132,6 +2250,8 @@ $('quota-list').onclick = e => {
   if (!action || !id) return;
   if (action === 'reset-cost') {
     resetVertexCost(id);
+  } else if (action === 'change-tier') {
+    openTierModal(id, btn.dataset.tier || 'standard', btn.dataset.label || id);
   }
 };
 
@@ -2145,6 +2265,87 @@ async function resetVertexCost(credentialId) {
     showErr(err);
   }
 }
+
+let currentTierEditCredId = null;
+
+function openTierModal(credentialId, currentTier, credentialLabel) {
+  currentTierEditCredId = credentialId;
+  const nameEl = $('tier-modal-cred-name');
+  if (nameEl) nameEl.textContent = credentialLabel || credentialId;
+  const normalizedTier = (currentTier || 'standard').toLowerCase();
+  ['flex', 'standard', 'priority'].forEach(tier => {
+    const btn = $('tier-btn-' + tier);
+    const badge = $('tier-badge-' + tier);
+    const isActive = tier === normalizedTier;
+    if (btn) {
+      if (isActive) btn.classList.add('active');
+      else btn.classList.remove('active');
+    }
+    if (badge) {
+      badge.textContent = t('currentTierBadge');
+      badge.style.display = isActive ? 'inline-block' : 'none';
+    }
+  });
+  const modal = $('tier-modal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeTierModal() {
+  currentTierEditCredId = null;
+  const modal = $('tier-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+$('tier-modal-close').onclick = closeTierModal;
+$('tier-modal').onclick = e => {
+  if (e.target === $('tier-modal')) closeTierModal();
+};
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const modal = $('tier-modal');
+    if (modal && modal.style.display !== 'none') {
+      closeTierModal();
+    }
+  }
+});
+
+$('tier-choices').onclick = async e => {
+  const btn = e.target.closest('button[data-tier]');
+  if (!btn || !currentTierEditCredId) return;
+  const newTier = btn.dataset.tier;
+  const credId = currentTierEditCredId;
+
+  if (btn.classList.contains('active')) {
+    closeTierModal();
+    return;
+  }
+
+  const allBtns = document.querySelectorAll('.tier-choice-btn');
+  allBtns.forEach(b => { b.disabled = true; b.style.opacity = '0.6'; });
+  btn.style.opacity = '1';
+  const titleEl = btn.querySelector('.tier-choice-title');
+  const origTitle = titleEl ? titleEl.textContent : '';
+  if (titleEl) {
+    titleEl.innerHTML = '<span style="display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:6px"></span>' + t('switchingTier');
+  }
+
+  try {
+    setNotice('');
+    await api('/v1/credentials/' + encodeURIComponent(credId) + '/service-tier', {
+      method: 'PUT',
+      body: JSON.stringify({ serviceTier: newTier }),
+    });
+    closeTierModal();
+    setNotice(t('tierUpdated') + ' (' + newTier.toUpperCase() + ')', 'ok');
+    await refreshAll();
+  } catch (err) {
+    showErr(err);
+  } finally {
+    allBtns.forEach(b => { b.disabled = false; b.style.opacity = ''; });
+    if (titleEl) titleEl.textContent = origTitle;
+  }
+};
 
 /* ── Test a credential ──
  * mode='auth'    → POST /test         (lightweight setupUser check)
@@ -2189,6 +2390,7 @@ async function testCredential(credentialId, mode) {
         const reply = (r.reply || '').trim();
         const dur = typeof r.durationMs === 'number' ? ' (' + (r.durationMs / 1000).toFixed(1) + 's)' : '';
         resultEl.textContent = t('testSuccess') + dur + (reply ? ' — ' + reply.slice(0, 80) : '');
+        void refreshQuotas(false);
       } else {
         resultEl.className = 'cred-test-result test-err';
         const dur = r && typeof r.durationMs === 'number' ? ' (' + (r.durationMs / 1000).toFixed(1) + 's)' : '';
@@ -2344,6 +2546,8 @@ const AcpUI = {
   lastWorkers: [],            // last-known workers payload for diff/render
   expanded: new Set(),        // credentialIds currently open
   detailCache: new Map(),     // credentialId → { quota, prompts, fetchedAt }
+  prevPromptSum: undefined,
+  prevMaxActivity: undefined,
 };
 
 function escapeHtml(s) {
@@ -2807,7 +3011,19 @@ function reconcileAcpWorkerList(workers, nowMs) {
 async function loadAcpStatus() {
   try {
     const st = await api('/v1/acp/status');
-    AcpUI.lastWorkers = Array.isArray(st.workers) ? st.workers : [];
+    const workers = Array.isArray(st.workers) ? st.workers : [];
+    const currentPromptSum = workers.reduce((acc, w) => acc + (w.recentPromptCount || 0), 0);
+    const currentMaxActivity = workers.reduce((max, w) => Math.max(max, w.lastActivity || 0), 0);
+
+    if (AcpUI.prevPromptSum !== undefined) {
+      if (currentPromptSum > AcpUI.prevPromptSum || currentMaxActivity > AcpUI.prevMaxActivity) {
+        void refreshQuotas(false);
+      }
+    }
+    AcpUI.prevPromptSum = currentPromptSum;
+    AcpUI.prevMaxActivity = currentMaxActivity;
+
+    AcpUI.lastWorkers = workers;
     AcpUI.lastUpdatedAt = Date.now();
 
     // Drop "expanded" entries for workers that no longer exist so the
@@ -2861,6 +3077,9 @@ function startAcpAutoRefresh() {
     if (!AcpUI.autoRefresh) return;
     void loadAcpStatus();
     void refreshInputComparison();
+    if (Date.now() - lastQuotasFetchedAt >= 30_000) {
+      void refreshQuotas(false);
+    }
   }, AcpUI.POLL_MS);
   setAcpLiveDot(true);
 }
@@ -2932,9 +3151,14 @@ document.addEventListener('toggle', (ev) => {
 // Resume / pause polling with tab visibility — avoids both wasted
 // background polls and a stale UI when the user comes back.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && AcpUI.autoRefresh) {
-    void loadAcpStatus();
+  if (document.visibilityState === 'visible') {
+    if (AcpUI.autoRefresh) void loadAcpStatus();
+    if (Date.now() - lastQuotasFetchedAt > 5000) void refreshQuotas(false);
   }
+});
+
+window.addEventListener('focus', () => {
+  if (Date.now() - lastQuotasFetchedAt > 5000) void refreshQuotas(false);
 });
 
 // The polling loop is started inside loadSettings() (after auth)

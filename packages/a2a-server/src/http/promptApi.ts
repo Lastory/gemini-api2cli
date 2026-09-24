@@ -89,6 +89,8 @@ export const PROMPT_API_CREDENTIAL_COST_RESET_ROUTE =
   '/v1/credentials/:credentialId/cost/reset';
 export const PROMPT_API_CREDENTIAL_COST_ROUTE =
   '/v1/credentials/:credentialId/cost';
+export const PROMPT_API_CREDENTIAL_SERVICE_TIER_ROUTE =
+  '/v1/credentials/:credentialId/service-tier';
 export const PROMPT_API_INPUT_COMPARISON_ROUTE = '/v1/input-comparison';
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -3040,7 +3042,7 @@ export function createPromptApiRouter(
           }
 
           let replySnippet = '';
-          await worker.prompt(
+          const promptResponse = await worker.prompt(
             sessionId,
             [{ type: 'text', text: 'hi' }],
             (update: SessionNotification) => {
@@ -3051,6 +3053,13 @@ export function createPromptApiRouter(
                 replySnippet += update.update.content.text;
               }
             },
+          );
+          const usageInfo = extractUsageInfo(promptResponse);
+          void trackVertexCostIfApplicable(
+            state,
+            credentialId,
+            requestModel,
+            usageInfo,
           );
           return res.status(200).json({
             ok: true,
@@ -3843,6 +3852,80 @@ export function createPromptApiRouter(
 
   router.post(PROMPT_API_CREDENTIAL_COST_RESET_ROUTE, resetCostHandler);
   router.delete(PROMPT_API_CREDENTIAL_COST_ROUTE, resetCostHandler);
+
+  const updateServiceTierHandler = async (req: Request, res: Response) => {
+    try {
+      const { credentialId } = req.params;
+      if (!credentialId) {
+        throw new BadRequestError('Credential ID is required.');
+      }
+      if (!isObject(req.body)) {
+        throw new BadRequestError('Request body must be a JSON object.');
+      }
+      const rawServiceTier = req.body['serviceTier'];
+      if (typeof rawServiceTier !== 'string') {
+        throw new BadRequestError(
+          '"serviceTier" must be a string ("standard", "flex", or "priority").',
+        );
+      }
+      const normalizedTier = rawServiceTier.trim().toLowerCase();
+      if (
+        normalizedTier !== 'standard' &&
+        normalizedTier !== 'flex' &&
+        normalizedTier !== 'priority'
+      ) {
+        throw new BadRequestError(
+          'Invalid "serviceTier". Allowed values are "standard", "flex", or "priority".',
+        );
+      }
+
+      const existing = await state.credentialStore.getCredential(credentialId);
+      if (!existing) {
+        return res.status(404).json({
+          error: `Credential not found: ${credentialId}`,
+        });
+      }
+      if (existing.type !== 'vertex-ai') {
+        return res.status(400).json({
+          error: `Credential "${credentialId}" is not a Vertex AI credential.`,
+        });
+      }
+
+      const updated = await state.credentialStore.updateVertexServiceTier(
+        credentialId,
+        normalizedTier,
+      );
+
+      if (state.acpPool) {
+        await state.acpPool.destroy(credentialId);
+      }
+
+      const currentCredentialId =
+        await state.credentialStore.getCurrentCredentialId();
+      return res.status(200).json({
+        credential: getPromptApiCredentialPayload(updated, currentCredentialId),
+        sessionPolicy: 'per-request',
+      });
+    } catch (error) {
+      if (error instanceof BadRequestError) {
+        return res.status(400).json({ error: error.message });
+      }
+      if (error instanceof Error && error.message.includes('not found')) {
+        return res.status(404).json({ error: error.message });
+      }
+      logPromptApiError(error);
+      return res.status(500).json({
+        error:
+          error instanceof Error ? error.message : 'Unknown prompt API error',
+      });
+    }
+  };
+
+  router.put(
+    PROMPT_API_CREDENTIAL_SERVICE_TIER_ROUTE,
+    updateServiceTierHandler,
+  );
+  router.patch(PROMPT_API_CREDENTIAL_ROUTE, updateServiceTierHandler);
 
   router.post(PROMPT_API_CREDENTIAL_LOGIN_ROUTE, async (req, res) => {
     try {

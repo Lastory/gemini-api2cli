@@ -84,7 +84,11 @@ export class PromptCredentialStore {
         (credential): credential is PromptApiCredentialRecord =>
           credential !== undefined,
       )
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      .sort((left, right) =>
+        (right.createdAt || right.updatedAt).localeCompare(
+          left.createdAt || left.updatedAt,
+        ),
+      );
   }
 
   async getCredential(
@@ -304,6 +308,38 @@ export class PromptCredentialStore {
       );
 
       return costEstimate;
+    });
+  }
+
+  async updateVertexServiceTier(
+    credentialId: string,
+    serviceTier: 'standard' | 'flex' | 'priority',
+  ): Promise<PromptApiCredentialRecord> {
+    return this.withCredentialLock(credentialId, async () => {
+      const existing = await this.getCredential(credentialId);
+      if (!existing) {
+        throw new Error(`Credential not found: ${credentialId}`);
+      }
+      if (existing.type !== 'vertex-ai') {
+        throw new Error(
+          `Credential "${credentialId}" is not a Vertex AI credential.`,
+        );
+      }
+
+      const now = new Date().toISOString();
+      const updated: PromptApiCredentialRecord = {
+        ...existing,
+        serviceTier,
+        updatedAt: now,
+      };
+
+      await writeFile(
+        this.getCredentialMetadataPath(credentialId),
+        JSON.stringify(updated, null, 2),
+        'utf8',
+      );
+
+      return updated;
     });
   }
 
