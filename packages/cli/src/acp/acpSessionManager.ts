@@ -55,6 +55,7 @@ export class AcpSessionManager {
     this.sessions.clear();
   }
 
+  // [a2a-server-patch] BEGIN: Delete/dispose session to prevent memory leaks
   deleteSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
@@ -62,6 +63,7 @@ export class AcpSessionManager {
       this.sessions.delete(sessionId);
     }
   }
+  // [a2a-server-patch] END: Delete/dispose session
 
   async newSession(
     { cwd, mcpServers }: acp.NewSessionRequest,

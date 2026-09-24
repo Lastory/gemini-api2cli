@@ -22,6 +22,7 @@ import type { AgentSettings } from '../types.js';
 import { GCSTaskStore, NoOpTaskStore } from '../persistence/gcs.js';
 import { CoderAgentExecutor } from '../agent/executor.js';
 import { requestStorage } from './requestStorage.js';
+// [a2a-server-patch] Prompt API router
 import { createPromptApiRouter } from './promptApi.js';
 import { loadConfig, loadEnvironment, setTargetDir } from '../config/config.js';
 import { loadSettings } from '../config/settings.js';
@@ -195,6 +196,7 @@ async function handleExecuteCommand(
   }
 }
 
+// [a2a-server-patch] BEGIN: Fallback routes when A2A mode is disabled or uninitialized
 function registerUnavailableAgentRoutes(expressApp: express.Express) {
   const unavailableMessage =
     'A2A agent routes are unavailable because the server could not initialize its direct Gemini configuration. Prompt API routes under /v1 remain available and can still reuse CLI login state.';
@@ -217,12 +219,14 @@ function registerUnavailableAgentRoutes(expressApp: express.Express) {
     res.status(503).json({ error: unavailableMessage });
   });
 }
+// [a2a-server-patch] END: Fallback routes when A2A mode is disabled or uninitialized
 
 export async function createApp() {
   const expressApp = express();
   expressApp.use((req, res, next) => {
     requestStorage.run({ req }, next);
   });
+  // [a2a-server-patch] BEGIN: Mount prompt API router and handle ENABLE_A2A switch
   expressApp.use(express.json({ limit: '200mb' }));
   expressApp.use(createPromptApiRouter());
 
@@ -234,6 +238,7 @@ export async function createApp() {
     registerUnavailableAgentRoutes(expressApp);
     return expressApp;
   }
+  // [a2a-server-patch] END: Mount prompt API router and handle ENABLE_A2A switch
 
   try {
     // Load the server configuration once on startup.
@@ -281,6 +286,7 @@ export async function createApp() {
       taskStoreForHandler = inMemoryTaskStore;
     }
 
+    // [a2a-server-patch] Pass shared config to executor for workspace config caching
     const agentExecutor = new CoderAgentExecutor(taskStoreForExecutor, config);
 
     const context = { config, git, agentExecutor };
@@ -409,6 +415,7 @@ export async function createApp() {
       }
       res.json({ metadata: await wrapper.task.getMetadata() });
     });
+    // [a2a-server-patch] BEGIN: Graceful degradation to prompt-api-only mode if A2A initialization fails
   } catch (error) {
     logger.warn(
       '[CoreAgent] Continuing in prompt-api-only mode because A2A initialization failed.',
@@ -416,6 +423,7 @@ export async function createApp() {
     logger.error('[CoreAgent] Error during startup:', error);
     registerUnavailableAgentRoutes(expressApp);
   }
+  // [a2a-server-patch] END: Graceful degradation to prompt-api-only mode
 
   return expressApp;
 }
@@ -425,6 +433,7 @@ export async function main() {
     const expressApp = await createApp();
     const port = Number(process.env['CODER_AGENT_PORT'] || 0);
 
+    // [a2a-server-patch] Allow specifying host via CODER_AGENT_HOST (defaults to 0.0.0.0 for container support)
     const host = process.env['CODER_AGENT_HOST'] || '0.0.0.0';
     const server = expressApp.listen(port, host, () => {
       const address = server.address();

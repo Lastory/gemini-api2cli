@@ -129,6 +129,7 @@ export async function loadConfig(
     trustedFolder: trusted,
     extensionLoader,
     checkpointing,
+    // [a2a-server-patch] Support proxy environment variables
     proxy:
       process.env['HTTPS_PROXY'] ||
       process.env['https_proxy'] ||

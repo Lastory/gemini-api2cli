@@ -85,6 +85,7 @@ export async function getInitialChatHistory(
   config: Config,
   extraHistory?: ReadonlyArray<Content | HistoryTurn>,
 ): Promise<Array<Content | HistoryTurn>> {
+  // [a2a-server-patch] Skip environment context in minimal prompt injection mode
   if (config.getPromptInjectionLevel() === 'minimal') {
     return [...(extraHistory ?? [])];
   }

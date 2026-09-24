@@ -13,9 +13,10 @@ import * as os from 'node:os';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-// Set auth token for prompt API tests.
+// [a2a-server-patch] BEGIN: Set auth token and enable A2A for endpoint tests
 process.env['GEMINI_PROMPT_API_TOKEN'] = 'test-token-for-tests';
 process.env['ENABLE_A2A'] = 'true';
+// [a2a-server-patch] END: Set auth token and enable A2A for endpoint tests
 
 import { createApp, updateCoderAgentCardUrl } from './app.js';
 import type { TaskMetadata } from '../types.js';
@@ -165,6 +166,7 @@ describe('Agent Server Endpoints', () => {
     expect(response.body.url).toBe(`http://localhost:${port}/`);
   });
 
+  // [a2a-server-patch] BEGIN: Test prompt API routes availability on A2A startup failure
   it('should keep prompt API routes available when A2A config initialization fails', async () => {
     const mockedLoadConfig = vi.mocked(loadConfig);
     mockedLoadConfig.mockRejectedValueOnce(
@@ -187,4 +189,5 @@ describe('Agent Server Endpoints', () => {
       'Prompt API routes under /v1 remain available',
     );
   });
+  // [a2a-server-patch] END: Test prompt API routes availability on A2A startup failure
 });

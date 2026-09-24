@@ -806,6 +806,7 @@ describe('Server Config (config.ts)', () => {
         expect(config.getRequestTimeoutMs()).toBeUndefined();
       });
 
+      // [a2a-server-patch] BEGIN: Tests for GEMINI_REQUEST_TIMEOUT_MS env var
       it('should return timeout in milliseconds if GEMINI_REQUEST_TIMEOUT_MS is set', () => {
         vi.stubEnv('GEMINI_REQUEST_TIMEOUT_MS', '45000');
         const config = new Config(baseParams);
@@ -819,6 +820,7 @@ describe('Server Config (config.ts)', () => {
         expect(config.getRequestTimeoutMs()).toBeUndefined();
         vi.unstubAllEnvs();
       });
+      // [a2a-server-patch] END: Tests for GEMINI_REQUEST_TIMEOUT_MS env var
     });
   });
 

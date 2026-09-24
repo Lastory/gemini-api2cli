@@ -5,6 +5,7 @@
  */
 
 import winston from 'winston';
+// [a2a-server-patch] BEGIN: In-memory LogBufferTransport for mirroring logs to admin console /v1/logs
 import Transport from 'winston-transport';
 
 import { logBuffer, type LogLevel } from '../http/logBuffer.js';
@@ -86,6 +87,7 @@ function safeStringify(v: unknown): string {
 // Minimum level to emit. Env override lets operators raise to 'debug' so the
 // admin console's "All (debug)" filter actually has content to show.
 const DEFAULT_LOG_LEVEL = process.env['LOG_LEVEL']?.toLowerCase() || 'info';
+// [a2a-server-patch] END: In-memory LogBufferTransport
 
 const logger = winston.createLogger({
   level: DEFAULT_LOG_LEVEL,

@@ -70,9 +70,11 @@ export class PromptProvider {
 
     const approvedPlanPath = context.config.getApprovedPlanPath();
 
+    // [a2a-server-patch] BEGIN: Prompt injection level checks (full/reduced/minimal)
     const injectionLevel = context.config.getPromptInjectionLevel();
     const isFull = injectionLevel === 'full';
     const isNotMinimal = injectionLevel !== 'minimal';
+    // [a2a-server-patch] END: Prompt injection level checks
 
     const desiredModel = resolveModel(
       context.config.getActiveModel(),
@@ -280,6 +282,7 @@ export class PromptProvider {
     }
 
     // --- Finalization (Shell) ---
+    // [a2a-server-patch] Pass userMemory/contextFilenames only when not minimal
     const finalPrompt = activeSnippets.renderFinalShell(
       basePrompt,
       isNotMinimal ? userMemory : undefined,

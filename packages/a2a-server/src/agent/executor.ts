@@ -43,12 +43,14 @@ import { Task } from './task.js';
 import { requestStorage } from '../http/requestStorage.js';
 import { pushTaskStateFailed } from '../utils/executor_utils.js';
 
+// [a2a-server-patch] BEGIN: Socket end abort grace period to prevent aborting on transient connection drop
 const getSocketEndAbortGracePeriodMs = (): number => {
   if (process.env['SOCKET_END_ABORT_GRACE_PERIOD_MS'] !== undefined) {
     return Number(process.env['SOCKET_END_ABORT_GRACE_PERIOD_MS']);
   }
   return process.env['NODE_ENV'] === 'test' ? 10 : 30_000;
 };
+// [a2a-server-patch] END: Socket end abort grace period
 
 /**
  * Provides a wrapper for Task. Passes data from Task to SDKTask.
@@ -97,6 +99,7 @@ export class CoderAgentExecutor implements AgentExecutor {
   private tasks: Map<string, TaskWrapper> = new Map();
   // Track tasks with an active execution loop.
   private executingTasks = new Set<string>();
+  // [a2a-server-patch] BEGIN: Cache Config instance across tasks in the same workspace
   private cachedConfig: Config | undefined;
   private cachedConfigWorkspace: string | undefined;
 
@@ -109,6 +112,7 @@ export class CoderAgentExecutor implements AgentExecutor {
       this.cachedConfigWorkspace = process.cwd();
     }
   }
+  // [a2a-server-patch] END: Cache Config instance across tasks in the same workspace
 
   private async getConfig(
     agentSettings: AgentSettings,
@@ -362,6 +366,7 @@ export class CoderAgentExecutor implements AgentExecutor {
 
     const abortController = new AbortController();
     const abortSignal = abortController.signal;
+    // [a2a-server-patch] BEGIN: Delayed abort on socket end with grace period to handle transient disconnections
     let cleanupSocketHandlers: (() => void) | undefined;
 
     if (store) {
@@ -419,6 +424,7 @@ export class CoderAgentExecutor implements AgentExecutor {
         `[CoderAgentExecutor] Socket close handler set up for task ${taskId}.`,
       );
     }
+    // [a2a-server-patch] END: Delayed abort on socket end with grace period
 
     let wrapper: TaskWrapper | undefined = this.tasks.get(taskId);
 

@@ -874,6 +874,7 @@ export async function loadCliConfig(
 
   const ptyInfo = await getPty();
 
+  // [a2a-server-patch] BEGIN: Disable MCP, extensions, and skills via environment variables
   const mcpEnabled =
     process.env['GEMINI_MCP_DISABLED'] === 'true'
       ? false
@@ -886,6 +887,7 @@ export async function loadCliConfig(
     process.env['GEMINI_SKILLS_DISABLED'] === 'true'
       ? false
       : (settings.admin?.skills?.enabled ?? true);
+  // [a2a-server-patch] END: Disable MCP, extensions, and skills via environment variables
 
   // Create MCP enablement manager and callbacks
   const mcpEnablementManager = McpServerEnablementManager.getInstance();
@@ -1060,6 +1062,7 @@ export async function loadCliConfig(
       ? settings.general.plan
       : (extensionPlanSettings ?? settings.general?.plan),
     enableEventDrivenScheduler: true,
+    // [a2a-server-patch] Disable skills via GEMINI_SKILLS_DISABLED
     skillsSupport:
       process.env['GEMINI_SKILLS_DISABLED'] === 'true'
         ? false

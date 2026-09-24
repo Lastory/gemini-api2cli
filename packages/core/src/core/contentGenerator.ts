@@ -107,6 +107,7 @@ export type ContentGeneratorConfig = {
   baseUrl?: string;
   customHeaders?: Record<string, string>;
   vertexAiRouting?: VertexAiRoutingConfig;
+  // [a2a-server-patch] Request timeout in milliseconds
   timeout?: number;
 };
 
@@ -138,6 +139,7 @@ export async function createContentGeneratorConfig(
   customHeaders?: Record<string, string>,
   vertexAiRouting?: VertexAiRoutingConfig,
 ): Promise<ContentGeneratorConfig> {
+  // [a2a-server-patch] BEGIN: Resolve Vertex AI routing and request timeout from env vars
   let resolvedVertexAiRouting = vertexAiRouting;
   const envSharedType = process.env['VERTEX_AI_SHARED_REQUEST_TYPE'];
   if (
@@ -168,6 +170,7 @@ export async function createContentGeneratorConfig(
       timeout = parsed;
     }
   }
+  // [a2a-server-patch] END: Resolve Vertex AI routing and request timeout from env vars
 
   const contentGeneratorConfig: ContentGeneratorConfig = {
     authType,
@@ -339,6 +342,7 @@ export async function createContentGenerator(
       if (config.customHeaders) {
         headers = { ...headers, ...config.customHeaders };
       }
+      // [a2a-server-patch] BEGIN: Fallback and apply Vertex AI routing headers
       let vertexAiRouting = config.vertexAiRouting;
       const envSharedType = process.env['VERTEX_AI_SHARED_REQUEST_TYPE'];
       if (
@@ -372,6 +376,7 @@ export async function createContentGenerator(
             : {}),
         };
       }
+      // [a2a-server-patch] END: Fallback and apply Vertex AI routing headers
       if (gcConfig?.getUsageStatisticsEnabled()) {
         const installationManager = new InstallationManager();
         const installationId = installationManager.getInstallationId();
@@ -407,6 +412,7 @@ export async function createContentGenerator(
         httpOptions.baseUrl = baseUrl;
       }
 
+      // [a2a-server-patch] Inject configured timeout into httpOptions
       const requestTimeout = config.timeout ?? gcConfig.getRequestTimeoutMs?.();
       if (requestTimeout !== undefined && requestTimeout > 0) {
         httpOptions.timeout = requestTimeout;

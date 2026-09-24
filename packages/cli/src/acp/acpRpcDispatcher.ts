@@ -234,6 +234,7 @@ export class GeminiAgent {
     return session.setModel(params.modelId);
   }
 
+  // [a2a-server-patch] BEGIN: Close/dispose session to prevent memory leaks
   /**
    * Close a session (internal method called by a2a-server).
    * Disposes the session and removes it from the manager.
@@ -245,4 +246,5 @@ export class GeminiAgent {
     this.sessionManager.deleteSession(sessionId);
     return {};
   }
+  // [a2a-server-patch] END: Close/dispose session
 }

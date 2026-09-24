@@ -322,7 +322,7 @@ export default tseslint.config(
       'import/enforce-node-protocol-usage': ['error', 'always'],
     },
   },
-  // CNC-1.0 licensed files added by gemini-api2cli – different header format
+  // [a2a-server-patch] CNC-1.0 licensed files added by gemini-api2cli – different header format
   {
     files: [
       'packages/a2a-server/src/http/promptApi.ts',

@@ -251,6 +251,7 @@ describe('Session', () => {
     expect(result).toMatchObject({ stopReason: 'end_turn' });
   });
 
+  // [a2a-server-patch] BEGIN: Test for usage with cached tokens in PromptResponse
   it('should capture and return usage with cached tokens in PromptResponse', async () => {
     async function* createUsageStream(): AsyncGenerator<ServerGeminiStreamEvent> {
       yield {
@@ -307,6 +308,7 @@ describe('Session', () => {
       cachedContentTokenCount: 1200,
     });
   });
+  // [a2a-server-patch] END: Test for usage with cached tokens in PromptResponse
 
   it('should pass current session information directly onto geminiClient.sendMessageStream', async () => {
     const stream = createMockStream([

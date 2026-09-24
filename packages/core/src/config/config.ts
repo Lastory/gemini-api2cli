@@ -1890,6 +1890,7 @@ export class Config implements McpContext, AgentLoopContext {
     return this.loadMemoryFromIncludeDirectories;
   }
 
+  // [a2a-server-patch] BEGIN: Dynamic prompt injection level (full/reduced/minimal)
   getPromptInjectionLevel(): 'full' | 'reduced' | 'minimal' {
     const level = process.env['GEMINI_PROMPT_INJECTION_LEVEL'];
     if (level === 'reduced' || level === 'minimal') {
@@ -1904,6 +1905,7 @@ export class Config implements McpContext, AgentLoopContext {
     }
     return this.includeDirectoryTree;
   }
+  // [a2a-server-patch] END: Dynamic prompt injection level
 
   getImportFormat(): 'tree' | 'flat' {
     return this.importFormat;
@@ -3607,6 +3609,7 @@ export class Config implements McpContext, AgentLoopContext {
    * Returns the configured default request timeout in milliseconds.
    */
   getRequestTimeoutMs(): number | undefined {
+    // [a2a-server-patch] BEGIN: Configurable request timeout via GEMINI_REQUEST_TIMEOUT_MS
     const envTimeout = process.env['GEMINI_REQUEST_TIMEOUT_MS'];
     if (envTimeout) {
       const ms = parseInt(envTimeout, 10);
@@ -3614,6 +3617,7 @@ export class Config implements McpContext, AgentLoopContext {
         return ms;
       }
     }
+    // [a2a-server-patch] END: Configurable request timeout via GEMINI_REQUEST_TIMEOUT_MS
     const flag =
       this.experiments?.flags?.[ExperimentFlags.DEFAULT_REQUEST_TIMEOUT];
     if (flag?.intValue !== undefined) {

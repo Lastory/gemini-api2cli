@@ -39,6 +39,7 @@ import {
 import { MockTool } from '@google/gemini-cli-core/src/test-utils/mock-tool.js';
 import type { Command, CommandContext } from '../commands/types.js';
 
+// [a2a-server-patch] Explicitly enable A2A for a2a-server tests
 process.env['ENABLE_A2A'] = 'true';
 
 const mockToolConfirmationFn = async () =>
@@ -1256,6 +1257,7 @@ describe('E2E Tests', () => {
 
       expect(listenSpy).toHaveBeenCalledWith(
         expect.any(Number),
+        // [a2a-server-patch] Support CODER_AGENT_HOST or default 0.0.0.0
         process.env['CODER_AGENT_HOST'] || '0.0.0.0',
         expect.any(Function),
       );

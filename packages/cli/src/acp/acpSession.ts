@@ -385,6 +385,7 @@ export class Session {
 
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+    // [a2a-server-patch] BEGIN: Extended token metrics (cached, thought, total) and ACP usage builder
     let totalCachedTokens = 0;
     let totalThoughtTokens = 0;
     let totalTokens = 0;
@@ -398,6 +399,7 @@ export class Session {
       cachedReadTokens: totalCachedTokens > 0 ? totalCachedTokens : undefined,
       thoughtTokens: totalThoughtTokens > 0 ? totalThoughtTokens : undefined,
     });
+    // [a2a-server-patch] END: Extended token metrics (cached, thought, total) and ACP usage builder
 
     let currentParts: Part[] = parts;
     let turnCount = 0;
@@ -486,6 +488,7 @@ export class Session {
             case GeminiEventType.Finished: {
               const usage = event.value.usageMetadata;
               if (usage) {
+                // [a2a-server-patch] BEGIN: Extract cached tokens, thoughts tokens and usageMetadata
                 lastUsageMetadata = usage;
                 turnInputTokens = usage.promptTokenCount ?? turnInputTokens;
                 turnOutputTokens =
@@ -505,6 +508,7 @@ export class Session {
                     turnCachedTokens = detailsSum;
                   }
                 }
+                // [a2a-server-patch] END: Extract cached tokens, thoughts tokens and usageMetadata
               }
               break;
             }
@@ -605,9 +609,11 @@ export class Session {
 
       totalInputTokens += turnInputTokens;
       totalOutputTokens += turnOutputTokens;
+      // [a2a-server-patch] BEGIN: Accumulate cached, thought and total tokens
       totalCachedTokens += turnCachedTokens;
       totalThoughtTokens += turnThoughtTokens;
       totalTokens += turnTotalTokens || turnInputTokens + turnOutputTokens;
+      // [a2a-server-patch] END: Accumulate cached, thought and total tokens
 
       if (turnInputTokens > 0 || turnOutputTokens > 0) {
         const existing = modelUsageMap.get(turnModelId) ?? {

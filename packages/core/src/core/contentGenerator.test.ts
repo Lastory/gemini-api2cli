@@ -484,6 +484,7 @@ describe('createContentGenerator', () => {
     );
   });
 
+  // [a2a-server-patch] BEGIN: Tests for Vertex AI routing and timeout injection
   it('should pass Vertex AI routing headers when configured via environment variables', async () => {
     vi.stubEnv('VERTEX_AI_SHARED_REQUEST_TYPE', 'flex');
     vi.stubEnv('VERTEX_AI_REQUEST_TYPE', 'shared');
@@ -568,6 +569,7 @@ describe('createContentGenerator', () => {
       vi.mocked(mockConfig.getRequestTimeoutMs).mockReturnValue(undefined);
     }
   });
+  // [a2a-server-patch] END: Tests for Vertex AI routing and timeout injection
 
   it('should inject HttpsProxyAgent into googleAuthOptions when proxy URL uses https://', async () => {
     const mockConfigWithProxy = {
@@ -1483,6 +1485,7 @@ describe('createContentGeneratorConfig', () => {
     expect(config.vertexAiRouting).toEqual(vertexAiRouting);
   });
 
+  // [a2a-server-patch] BEGIN: Test fallback to VERTEX_AI_SHARED_REQUEST_TYPE and VERTEX_AI_REQUEST_TYPE env vars
   it('should fallback to VERTEX_AI_SHARED_REQUEST_TYPE and VERTEX_AI_REQUEST_TYPE env vars if not passed', async () => {
     vi.stubEnv('GOOGLE_API_KEY', 'env-google-key');
     vi.stubEnv('VERTEX_AI_SHARED_REQUEST_TYPE', 'flex');
@@ -1498,6 +1501,7 @@ describe('createContentGeneratorConfig', () => {
       sharedRequestType: 'flex',
     });
   });
+  // [a2a-server-patch] END: Test fallback to VERTEX_AI_SHARED_REQUEST_TYPE and VERTEX_AI_REQUEST_TYPE env vars
 
   it('should configure for Vertex AI using GCP project and location when set', async () => {
     vi.stubEnv('GOOGLE_API_KEY', undefined);
