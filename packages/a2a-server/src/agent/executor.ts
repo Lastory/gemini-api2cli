@@ -17,6 +17,9 @@ import {
   SimpleExtensionLoader,
   type ToolCallRequestInfo,
   type Config,
+  checkPathTrust,
+  isHeadlessMode,
+  resolveToRealPath,
 } from '@google/gemini-cli-core';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -33,25 +36,25 @@ import {
 } from '../types.js';
 import {
   loadConfig,
-  loadEnvironment,
-  setIsTrusted,
   setTargetDir,
+  envStorage,
+  cwdSymbol,
+  loadEnvironment,
+  type TaskEnv,
 } from '../config/config.js';
 import { loadSettings } from '../config/settings.js';
 import { loadExtensions } from '../config/extension.js';
 import { Task } from './task.js';
 import { requestStorage } from '../http/requestStorage.js';
 import { pushTaskStateFailed } from '../utils/executor_utils.js';
-import { validateWorkspacePath } from '../utils/path_utils.js';
 
-// [a2a-server-patch] BEGIN: Socket end abort grace period to prevent aborting on transient connection drop
-const getSocketEndAbortGracePeriodMs = (): number => {
-  if (process.env['SOCKET_END_ABORT_GRACE_PERIOD_MS'] !== undefined) {
-    return Number(process.env['SOCKET_END_ABORT_GRACE_PERIOD_MS']);
+function validateWorkspacePath(workspacePath?: string): string {
+  const trimmed = workspacePath?.trim();
+  if (!trimmed) {
+    return process.env['CODER_AGENT_WORKSPACE_PATH'] ?? process.cwd();
   }
-  return process.env['NODE_ENV'] === 'test' ? 10 : 30_000;
-};
-// [a2a-server-patch] END: Socket end abort grace period
+  return resolveToRealPath(trimmed);
+}
 
 /**
  * Provides a wrapper for Task. Passes data from Task to SDKTask.
@@ -96,6 +99,15 @@ class TaskWrapper {
 /**
  * CoderAgentExecutor implements the agent's core logic for code generation.
  */
+// [a2a-server-patch] BEGIN: Socket end abort grace period to prevent aborting on transient connection drop
+const getSocketEndAbortGracePeriodMs = (): number => {
+  if (process.env['SOCKET_END_ABORT_GRACE_PERIOD_MS'] !== undefined) {
+    return Number(process.env['SOCKET_END_ABORT_GRACE_PERIOD_MS']);
+  }
+  return process.env['NODE_ENV'] === 'test' ? 10 : 30_000;
+};
+// [a2a-server-patch] END: Socket end abort grace period
+
 export class CoderAgentExecutor implements AgentExecutor {
   private tasks: Map<string, TaskWrapper> = new Map();
   // Track tasks with an active execution loop.
@@ -106,6 +118,7 @@ export class CoderAgentExecutor implements AgentExecutor {
   private initializationPromises = new Map<string, Promise<TaskWrapper>>();
   // Track explicitly canceled task IDs to handle cancellation during initialization.
   private explicitlyCanceledTasks = new Set<string>();
+
   // [a2a-server-patch] BEGIN: Cache Config instance across tasks in the same workspace
   private cachedConfig: Config | undefined;
   private cachedConfigWorkspace: string | undefined;
@@ -121,35 +134,69 @@ export class CoderAgentExecutor implements AgentExecutor {
   }
   // [a2a-server-patch] END: Cache Config instance across tasks in the same workspace
 
-  private async getConfig(
+  private async getConfigWithEnv(
     agentSettings: AgentSettings,
     taskId: string,
+    isTrusted: boolean,
+    workspaceRoot: string,
   ): Promise<Config> {
-    const workspaceRoot = setTargetDir(agentSettings);
-
-    // Reuse cached config if workspace hasn't changed
+    // [a2a-server-patch] BEGIN: Cache Config instance across tasks in the same workspace
     if (this.cachedConfig && this.cachedConfigWorkspace === workspaceRoot) {
       logger.info(
         `[CoderAgentExecutor] Reusing cached config for task ${taskId}`,
       );
       return this.cachedConfig;
     }
+    // [a2a-server-patch] END: Cache Config instance across tasks in the same workspace
 
-    loadEnvironment(); // Will override any global env with workspace envs
-    const isTrusted = setIsTrusted(agentSettings);
     const settings = loadSettings(workspaceRoot, isTrusted);
-    const extensions = loadExtensions(workspaceRoot);
+    const extensions = loadExtensions(workspaceRoot, isTrusted);
     const config = await loadConfig(
       settings,
       new SimpleExtensionLoader(extensions),
       taskId,
       isTrusted,
+      workspaceRoot,
     );
 
-    // Cache for subsequent tasks in the same workspace
+    // [a2a-server-patch] BEGIN: Cache Config instance across tasks in the same workspace
     this.cachedConfig = config;
     this.cachedConfigWorkspace = workspaceRoot;
+    // [a2a-server-patch] END: Cache Config instance across tasks in the same workspace
     return config;
+  }
+
+  private async runInIsolatedEnv<T>(
+    agentSettings: AgentSettings,
+    fn: (isTrusted: boolean, workspaceRoot: string) => Promise<T>,
+  ): Promise<T> {
+    const workspaceRoot = await setTargetDir(agentSettings);
+    const initialSettings = loadSettings(workspaceRoot, false);
+    const { isTrusted } = checkPathTrust({
+      path: workspaceRoot,
+      isFolderTrustEnabled: initialSettings.folderTrust ?? true,
+      isHeadless: isHeadlessMode(),
+    });
+
+    const envVars: TaskEnv = { ...process.env };
+    envVars[cwdSymbol] = workspaceRoot;
+
+    return envStorage.run(envVars, async () => {
+      const loadedEnv = await loadEnvironment(
+        isTrusted ?? false,
+        workspaceRoot,
+      );
+      Object.assign(envVars, loadedEnv);
+      return fn(isTrusted ?? false, workspaceRoot);
+    });
+  }
+
+  private cleanupAndEvictTask(taskId: string) {
+    const wrapper = this.tasks.get(taskId);
+    if (wrapper) {
+      wrapper.task.dispose();
+      this.tasks.delete(taskId);
+    }
   }
 
   /**
@@ -168,11 +215,11 @@ export class CoderAgentExecutor implements AgentExecutor {
       );
     }
 
-    let agentSettings;
+    let agentSettings: AgentSettings;
     try {
       agentSettings = {
         ...(persistedState._agentSettings ?? {}),
-        workspacePath: await validateWorkspacePath(
+        workspacePath: validateWorkspacePath(
           persistedState._agentSettings?.workspacePath,
         ),
         isTrusted: false,
@@ -192,23 +239,34 @@ export class CoderAgentExecutor implements AgentExecutor {
       }
       throw error; // Re-throw to be caught by caller
     }
-    const config = await this.getConfig(agentSettings, sdkTask.id);
-    const contextId: string =
-      getContextIdFromMetadata(metadata) || sdkTask.contextId;
-    const runtimeTask = await Task.create(
-      sdkTask.id,
-      contextId,
-      config,
-      eventBus,
-      agentSettings.autoExecute,
-    );
-    runtimeTask.taskState = persistedState._taskState;
-    await runtimeTask.geminiClient.initialize();
 
-    const wrapper = new TaskWrapper(runtimeTask, agentSettings);
-    this.tasks.set(sdkTask.id, wrapper);
-    logger.info(`Task ${sdkTask.id} reconstructed from store.`);
-    return wrapper;
+    return this.runInIsolatedEnv(
+      agentSettings,
+      async (isTrusted, workspaceRoot) => {
+        const config = await this.getConfigWithEnv(
+          agentSettings,
+          sdkTask.id,
+          isTrusted,
+          workspaceRoot,
+        );
+        const contextId: string =
+          getContextIdFromMetadata(metadata) || sdkTask.contextId;
+        const runtimeTask = await Task.create(
+          sdkTask.id,
+          contextId,
+          config,
+          eventBus,
+          agentSettings.autoExecute,
+        );
+        runtimeTask.taskState = persistedState._taskState;
+        await runtimeTask.geminiClient.initialize();
+
+        const wrapper = new TaskWrapper(runtimeTask, agentSettings);
+        this.tasks.set(sdkTask.id, wrapper);
+        logger.info(`Task ${sdkTask.id} reconstructed from store.`);
+        return wrapper;
+      },
+    );
   }
 
   async createTask(
@@ -221,20 +279,30 @@ export class CoderAgentExecutor implements AgentExecutor {
       kind: CoderAgentEvent.StateAgentSettingsEvent,
       workspacePath: process.cwd(),
     };
-    const config = await this.getConfig(agentSettings, taskId);
-    const runtimeTask = await Task.create(
-      taskId,
-      contextId,
-      config,
-      eventBus,
-      agentSettings.autoExecute,
-    );
-    await runtimeTask.geminiClient.initialize();
+    return this.runInIsolatedEnv(
+      agentSettings,
+      async (isTrusted, workspaceRoot) => {
+        const config = await this.getConfigWithEnv(
+          agentSettings,
+          taskId,
+          isTrusted,
+          workspaceRoot,
+        );
+        const runtimeTask = await Task.create(
+          taskId,
+          contextId,
+          config,
+          eventBus,
+          agentSettings.autoExecute,
+        );
+        await runtimeTask.geminiClient.initialize();
 
-    const wrapper = new TaskWrapper(runtimeTask, agentSettings);
-    this.tasks.set(taskId, wrapper);
-    logger.info(`New task ${taskId} created.`);
-    return wrapper;
+        const wrapper = new TaskWrapper(runtimeTask, agentSettings);
+        this.tasks.set(taskId, wrapper);
+        logger.info(`New task ${taskId} created.`);
+        return wrapper;
+      },
+    );
   }
 
   getTask(taskId: string): TaskWrapper | undefined {
@@ -243,17 +311,6 @@ export class CoderAgentExecutor implements AgentExecutor {
 
   getAllTasks(): TaskWrapper[] {
     return Array.from(this.tasks.values());
-  }
-
-  private cleanupAndEvictTask(taskId: string) {
-    const wrapper = this.tasks.get(taskId);
-    if (wrapper) {
-      logger.info(
-        `[CoderAgentExecutor] Task ${taskId} reached terminal state ${wrapper.task.taskState}. Evicting and disposing.`,
-      );
-      wrapper.task.dispose();
-      this.tasks.delete(taskId);
-    }
   }
 
   cancelTask = async (
@@ -365,7 +422,7 @@ export class CoderAgentExecutor implements AgentExecutor {
 
     try {
       logger.info(
-        `[CoderAgentExecutor] Initiating cancellation for idle task ${taskId}.`,
+        `[CoderAgentExecutor] Initiating cancellation for task ${taskId}.`,
       );
       task.cancelPendingTools('Task canceled by user request.');
 
@@ -432,476 +489,524 @@ export class CoderAgentExecutor implements AgentExecutor {
       getContextIdFromMetadata(sdkTask?.metadata) ||
       uuidv4();
 
-    logger.info(
-      `[CoderAgentExecutor] Executing for taskId: ${taskId}, contextId: ${contextId}`,
-    );
-    logger.info(
-      `[CoderAgentExecutor] userMessage: ${JSON.stringify(userMessage)}`,
-    );
-    eventBus.on('event', (event: AgentExecutionEvent) =>
-      logger.info('[EventBus event]: ', event),
-    );
-
-    const store = requestStorage.getStore();
-    if (!store) {
-      logger.error(
-        '[CoderAgentExecutor] Could not get request from async local storage. Cancellation on socket close will not be handled for this request.',
-      );
-    }
-
-    const abortController = new AbortController();
-    const abortSignal = abortController.signal;
-    // [a2a-server-patch] BEGIN: Delayed abort on socket end with grace period to handle transient disconnections
-    let cleanupSocketHandlers: (() => void) | undefined;
-
-    if (!this.activeAbortControllers.has(taskId)) {
-      this.activeAbortControllers.set(taskId, new Set());
-    }
-    this.activeAbortControllers.get(taskId)!.add(abortController);
-
-    let proceedToMainLoop = false;
-    let wrapper: TaskWrapper | undefined;
-    let isPrimaryExecution = false;
-
+    let agentSettings: AgentSettings;
     try {
-      // [a2a-server-patch] BEGIN: Delayed abort on socket end with grace period to handle transient disconnections
-      if (store) {
-        // Grab the raw socket from the request object
-        const socket = store.req.socket;
-        let socketEndAbortTimer: ReturnType<typeof setTimeout> | undefined;
-
-        const clearPendingSocketEndAbort = () => {
-          if (socketEndAbortTimer) {
-            clearTimeout(socketEndAbortTimer);
-            socketEndAbortTimer = undefined;
-          }
+      const existingWrapper = this.tasks.get(taskId);
+      if (existingWrapper) {
+        agentSettings = existingWrapper.agentSettings;
+      } else if (sdkTask) {
+        const persistedState = getPersistedState(sdkTask.metadata || {});
+        agentSettings = {
+          kind: CoderAgentEvent.StateAgentSettingsEvent,
+          ...(persistedState?._agentSettings ?? {}),
+          workspacePath: validateWorkspacePath(
+            persistedState?._agentSettings?.workspacePath,
+          ),
+          isTrusted: false,
         };
+      } else {
+        const rawAgentSettings = getAgentSettingsFromMetadata(
+          userMessage.metadata,
+        );
+        agentSettings = {
+          kind: CoderAgentEvent.StateAgentSettingsEvent,
+          ...(rawAgentSettings || {}),
+          workspacePath: validateWorkspacePath(rawAgentSettings?.workspacePath),
+          isTrusted: false,
+        };
+      }
+    } catch (error) {
+      logger.error(
+        `[CoderAgentExecutor] Invalid workspace path during execution setup for task ${taskId}:`,
+        error,
+      );
+      if (eventBus) {
+        void pushTaskStateFailed(error, eventBus, taskId, contextId);
+      }
+      throw error;
+    }
 
-        const onSocketEnd = () => {
-          if (abortController.signal.aborted || socketEndAbortTimer) {
-            return;
-          }
+    return this.runInIsolatedEnv(agentSettings, async () => {
+      try {
+        logger.info(
+          `[CoderAgentExecutor] Executing for taskId: ${taskId}, contextId: ${contextId}`,
+        );
+        logger.info(
+          `[CoderAgentExecutor] userMessage: ${JSON.stringify(userMessage)}`,
+        );
+        eventBus.on('event', (event: AgentExecutionEvent) =>
+          logger.info('[EventBus event]: ', event),
+        );
 
-          const gracePeriod = getSocketEndAbortGracePeriodMs();
-          logger.info(
-            `[CoderAgentExecutor] Socket ended for message ${userMessage.messageId} (task ${taskId}). Waiting ${gracePeriod}ms before aborting execution loop.`,
+        const store = requestStorage.getStore();
+        if (!store) {
+          logger.error(
+            '[CoderAgentExecutor] Could not get request from async local storage. Cancellation on socket close will not be handled for this request.',
           );
+        }
 
-          socketEndAbortTimer = setTimeout(() => {
-            socketEndAbortTimer = undefined;
-            if (!abortController.signal.aborted) {
+        const abortController = new AbortController();
+        const abortSignal = abortController.signal;
+        // [a2a-server-patch] BEGIN: Delayed abort on socket end with grace period to handle transient disconnections
+        let cleanupSocketHandlers: (() => void) | undefined;
+
+        if (!this.activeAbortControllers.has(taskId)) {
+          this.activeAbortControllers.set(taskId, new Set());
+        }
+        this.activeAbortControllers.get(taskId)!.add(abortController);
+
+        let proceedToMainLoop = false;
+        let wrapper: TaskWrapper | undefined;
+        let isPrimaryExecution = false;
+
+        try {
+          // [a2a-server-patch] BEGIN: Delayed abort on socket end with grace period to handle transient disconnections
+          if (store) {
+            const socket = store.req.socket;
+            let socketEndAbortTimer: ReturnType<typeof setTimeout> | undefined;
+
+            const clearPendingSocketEndAbort = () => {
+              if (socketEndAbortTimer) {
+                clearTimeout(socketEndAbortTimer);
+                socketEndAbortTimer = undefined;
+              }
+            };
+
+            const onSocketEnd = () => {
+              if (abortController.signal.aborted || socketEndAbortTimer) {
+                return;
+              }
+
+              const gracePeriod = getSocketEndAbortGracePeriodMs();
               logger.info(
-                `[CoderAgentExecutor] Socket remained inactive for ${gracePeriod}ms after end for message ${userMessage.messageId} (task ${taskId}). Aborting execution loop.`,
+                `[CoderAgentExecutor] Socket ended for message ${userMessage.messageId} (task ${taskId}). Waiting ${gracePeriod}ms before aborting execution loop.`,
               );
-              abortController.abort();
+
+              socketEndAbortTimer = setTimeout(() => {
+                socketEndAbortTimer = undefined;
+                if (!abortController.signal.aborted) {
+                  logger.info(
+                    `[CoderAgentExecutor] Socket remained inactive for ${gracePeriod}ms after end for message ${userMessage.messageId} (task ${taskId}). Aborting execution loop.`,
+                  );
+                  abortController.abort();
+                }
+              }, gracePeriod);
+            };
+
+            const onSocketClose = () => {
+              socket.removeListener('end', onSocketEnd);
+            };
+
+            cleanupSocketHandlers = () => {
+              clearPendingSocketEndAbort();
+              socket.removeListener('end', onSocketEnd);
+              socket.removeListener('close', onSocketClose);
+            };
+
+            socket.on('end', onSocketEnd);
+            socket.once('close', onSocketClose);
+
+            abortSignal.addEventListener('abort', () => {
+              cleanupSocketHandlers?.();
+            });
+            logger.info(
+              `[CoderAgentExecutor] Socket close handler set up for task ${taskId}.`,
+            );
+          }
+          // [a2a-server-patch] END: Delayed abort on socket end with grace period
+
+          // Check if the task is currently initializing
+          if (this.initializingTasks.has(taskId)) {
+            logger.info(
+              `[CoderAgentExecutor] Task ${taskId} is currently initializing. Waiting for initialization to complete.`,
+            );
+            const initPromise = this.initializationPromises.get(taskId);
+            if (initPromise) {
+              try {
+                wrapper = await initPromise;
+              } catch {
+                logger.error(
+                  `[CoderAgentExecutor] Failed to wait for task ${taskId} initialization.`,
+                );
+                return;
+              }
             }
-          }, gracePeriod);
-        };
+          }
 
-        const onSocketClose = () => {
-          socket.removeListener('end', onSocketEnd);
-        };
+          if (!wrapper) {
+            this.initializingTasks.add(taskId);
+            const initPromise = (async () => {
+              let initializedWrapper: TaskWrapper | undefined;
+              initializedWrapper = this.tasks.get(taskId);
 
-        cleanupSocketHandlers = () => {
-          clearPendingSocketEndAbort();
-          socket.removeListener('end', onSocketEnd);
-          socket.removeListener('close', onSocketClose);
-        };
+              if (initializedWrapper) {
+                initializedWrapper.task.eventBus = eventBus;
+                logger.info(
+                  `[CoderAgentExecutor] Task ${taskId} found in memory cache.`,
+                );
+              } else if (sdkTask) {
+                logger.info(
+                  `[CoderAgentExecutor] Task ${taskId} found in TaskStore. Reconstructing...`,
+                );
+                try {
+                  initializedWrapper = await this.reconstruct(
+                    sdkTask,
+                    eventBus,
+                  );
+                } catch (e) {
+                  logger.error(
+                    `[CoderAgentExecutor] Aborting execution due to failed task reconstruction for task ${taskId}:`,
+                    e,
+                  );
+                  throw e;
+                }
+              } else {
+                initializedWrapper = await this.createTask(
+                  taskId,
+                  contextId,
+                  agentSettings,
+                  eventBus,
+                );
+                const newTaskSDK = initializedWrapper.toSDKTask();
+                eventBus.publish({
+                  ...newTaskSDK,
+                  kind: 'task',
+                  status: {
+                    state: 'submitted',
+                    timestamp: new Date().toISOString(),
+                  },
+                  history: [userMessage],
+                });
+                try {
+                  await this.taskStore?.save(newTaskSDK);
+                  logger.info(
+                    `[CoderAgentExecutor] New task ${taskId} saved to store.`,
+                  );
+                } catch (saveError) {
+                  logger.error(
+                    `[CoderAgentExecutor] Failed to save new task ${taskId} to store:`,
+                    saveError,
+                  );
+                }
+              }
+              return initializedWrapper;
+            })();
 
-        // Listen on the socket's 'end' event (remote closed the connection)
-        socket.on('end', onSocketEnd);
-        socket.once('close', onSocketClose);
+            this.initializationPromises.set(taskId, initPromise);
 
-        // It's also good practice to remove the listener if the task completes successfully
-        abortSignal.addEventListener('abort', () => {
-          cleanupSocketHandlers?.();
-        });
-        logger.info(
-          `[CoderAgentExecutor] Socket close handler set up for task ${taskId}.`,
-        );
-      }
-      // [a2a-server-patch] END: Delayed abort on socket end with grace period
+            try {
+              wrapper = await initPromise;
+            } catch {
+              // Error is already handled/logged inside the promise
+              return;
+            } finally {
+              this.initializingTasks.delete(taskId);
+              this.initializationPromises.delete(taskId);
+            }
+          }
 
-      // Check if the task is currently initializing
-      if (this.initializingTasks.has(taskId)) {
-        logger.info(
-          `[CoderAgentExecutor] Task ${taskId} is currently initializing. Waiting for initialization to complete.`,
-        );
-        const initPromise = this.initializationPromises.get(taskId);
-        if (initPromise) {
-          try {
-            wrapper = await initPromise;
-          } catch {
+          if (!wrapper) {
             logger.error(
-              `[CoderAgentExecutor] Failed to wait for task ${taskId} initialization.`,
+              `[CoderAgentExecutor] Task ${taskId} is unexpectedly undefined after load/create.`,
             );
             return;
           }
-        }
-      }
 
-      if (!wrapper) {
-        this.initializingTasks.add(taskId);
-        const initPromise = (async () => {
-          let initializedWrapper: TaskWrapper | undefined;
-          initializedWrapper = this.tasks.get(taskId);
+          const currentTask = wrapper.task;
 
-          if (initializedWrapper) {
-            initializedWrapper.task.eventBus = eventBus;
-            logger.info(
-              `[CoderAgentExecutor] Task ${taskId} found in memory cache.`,
+          if (
+            ['canceled', 'failed', 'completed'].includes(currentTask.taskState)
+          ) {
+            logger.warn(
+              `[CoderAgentExecutor] Attempted to execute task ${taskId} which is already in state ${currentTask.taskState}. Ignoring.`,
             );
-          } else if (sdkTask) {
-            logger.info(
-              `[CoderAgentExecutor] Task ${taskId} found in TaskStore. Reconstructing...`,
+            return;
+          }
+
+          if (abortSignal.aborted) {
+            logger.warn(
+              `[CoderAgentExecutor] Task ${taskId} was aborted during initialization.`,
+            );
+            const isExplicitCancel = this.explicitlyCanceledTasks.has(taskId);
+            const finalState = isExplicitCancel ? 'canceled' : 'input-required';
+            const message = isExplicitCancel
+              ? 'Task canceled by user request.'
+              : 'Execution aborted by client.';
+            currentTask.setTaskStateAndPublishUpdate(
+              finalState,
+              { kind: CoderAgentEvent.StateChangeEvent },
+              message,
+              undefined,
+              true,
             );
             try {
-              initializedWrapper = await this.reconstruct(sdkTask, eventBus);
-            } catch (e) {
-              logger.error(
-                `[CoderAgentExecutor] Aborting execution due to failed task reconstruction for task ${taskId}:`,
-                e,
-              );
-              throw e;
-            }
-          } else {
-            let agentSettings: AgentSettings;
-            try {
-              const rawAgentSettings = getAgentSettingsFromMetadata(
-                userMessage.metadata,
-              );
-              const validatedWorkspacePath = await validateWorkspacePath(
-                rawAgentSettings?.workspacePath,
-              );
-              agentSettings = {
-                kind: CoderAgentEvent.StateAgentSettingsEvent,
-                ...(rawAgentSettings || {}),
-                workspacePath: validatedWorkspacePath,
-                isTrusted: false,
-              };
-              initializedWrapper = await this.createTask(
-                taskId,
-                contextId,
-                agentSettings,
-                eventBus,
-              );
-            } catch (error) {
-              logger.error(
-                `[CoderAgentExecutor] Error creating task ${taskId}:`,
-                error,
-              );
-              void pushTaskStateFailed(error, eventBus, taskId, contextId);
-              throw error;
-            }
-            const newTaskSDK = initializedWrapper.toSDKTask();
-            eventBus.publish({
-              ...newTaskSDK,
-              kind: 'task',
-              status: {
-                state: 'submitted',
-                timestamp: new Date().toISOString(),
-              },
-              history: [userMessage],
-            });
-            try {
-              await this.taskStore?.save(newTaskSDK);
-              logger.info(
-                `[CoderAgentExecutor] New task ${taskId} saved to store.`,
-              );
+              await this.taskStore?.save(wrapper.toSDKTask());
             } catch (saveError) {
               logger.error(
-                `[CoderAgentExecutor] Failed to save new task ${taskId} to store:`,
+                `[CoderAgentExecutor] Failed to save task ${taskId} state:`,
                 saveError,
               );
             }
+            if (isExplicitCancel) {
+              this.cleanupAndEvictTask(taskId);
+            }
+            return;
           }
-          return initializedWrapper;
-        })();
 
-        this.initializationPromises.set(taskId, initPromise);
-
-        try {
-          wrapper = await initPromise;
-        } catch {
-          // Error is already handled/logged inside the promise
-          return;
-        } finally {
-          this.initializingTasks.delete(taskId);
-          this.initializationPromises.delete(taskId);
-        }
-      }
-
-      if (!wrapper) {
-        logger.error(
-          `[CoderAgentExecutor] Task ${taskId} is unexpectedly undefined after load/create.`,
-        );
-        return;
-      }
-
-      const currentTask = wrapper.task;
-
-      if (['canceled', 'failed', 'completed'].includes(currentTask.taskState)) {
-        logger.warn(
-          `[CoderAgentExecutor] Attempted to execute task ${taskId} which is already in state ${currentTask.taskState}. Ignoring.`,
-        );
-        return;
-      }
-
-      if (abortSignal.aborted) {
-        logger.warn(
-          `[CoderAgentExecutor] Task ${taskId} was aborted during initialization.`,
-        );
-        const isExplicitCancel = this.explicitlyCanceledTasks.has(taskId);
-        const finalState = isExplicitCancel ? 'canceled' : 'input-required';
-        const message = isExplicitCancel
-          ? 'Task canceled by user request.'
-          : 'Execution aborted by client.';
-        currentTask.setTaskStateAndPublishUpdate(
-          finalState,
-          { kind: CoderAgentEvent.StateChangeEvent },
-          message,
-          undefined,
-          true,
-        );
-        try {
-          await this.taskStore?.save(wrapper.toSDKTask());
-        } catch (saveError) {
-          logger.error(
-            `[CoderAgentExecutor] Failed to save task ${taskId} state:`,
-            saveError,
-          );
-        }
-        if (isExplicitCancel) {
-          this.cleanupAndEvictTask(taskId);
-        }
-        return;
-      }
-
-      if (this.executingTasks.has(taskId)) {
-        logger.info(
-          `[CoderAgentExecutor] Task ${taskId} has a pending execution. Processing message and yielding.`,
-        );
-        currentTask.eventBus = eventBus;
-        try {
-          for await (const _ of currentTask.acceptUserMessage(
-            requestContext,
-            abortController.signal,
-          )) {
+          if (this.executingTasks.has(taskId)) {
             logger.info(
-              `[CoderAgentExecutor] Processing user message ${userMessage.messageId} in secondary execution loop for task ${taskId}.`,
+              `[CoderAgentExecutor] Task ${taskId} has a pending execution. Processing message and yielding.`,
             );
+            currentTask.eventBus = eventBus;
+            try {
+              for await (const _ of currentTask.acceptUserMessage(
+                requestContext,
+                abortController.signal,
+              )) {
+                logger.info(
+                  `[CoderAgentExecutor] Processing user message ${userMessage.messageId} in secondary execution loop for task ${taskId}.`,
+                );
+              }
+            } catch (error) {
+              if (!abortController.signal.aborted) {
+                throw error;
+              }
+              logger.info(
+                `[CoderAgentExecutor] Secondary execution loop for task ${taskId} was aborted.`,
+              );
+            }
+            return;
           }
-        } catch (error) {
-          if (!abortController.signal.aborted) {
-            throw error;
+
+          isPrimaryExecution = true;
+
+          proceedToMainLoop = true;
+        } finally {
+          this.explicitlyCanceledTasks.delete(taskId);
+          if (!proceedToMainLoop) {
+            cleanupSocketHandlers?.();
+            const controllers = this.activeAbortControllers.get(taskId);
+            if (controllers) {
+              controllers.delete(abortController);
+              if (controllers.size === 0) {
+                this.activeAbortControllers.delete(taskId);
+              }
+            }
           }
+        }
+
+        const currentTask = wrapper.task;
+        try {
           logger.info(
-            `[CoderAgentExecutor] Secondary execution loop for task ${taskId} was aborted.`,
+            `[CoderAgentExecutor] Starting main execution for message ${userMessage.messageId} for task ${taskId}.`,
           );
-        }
-        return;
-      }
+          this.executingTasks.add(taskId);
 
-      isPrimaryExecution = true;
-
-      proceedToMainLoop = true;
-    } finally {
-      this.explicitlyCanceledTasks.delete(taskId);
-      if (!proceedToMainLoop) {
-        cleanupSocketHandlers?.();
-        const controllers = this.activeAbortControllers.get(taskId);
-        if (controllers) {
-          controllers.delete(abortController);
-          if (controllers.size === 0) {
-            this.activeAbortControllers.delete(taskId);
-          }
-        }
-      }
-    }
-
-    const currentTask = wrapper.task;
-    try {
-      logger.info(
-        `[CoderAgentExecutor] Starting main execution for message ${userMessage.messageId} for task ${taskId}.`,
-      );
-      this.executingTasks.add(taskId);
-
-      let agentTurnActive = true;
-      logger.info(`[CoderAgentExecutor] Task ${taskId}: Processing user turn.`);
-      let agentEvents = currentTask.acceptUserMessage(
-        requestContext,
-        abortSignal,
-      );
-
-      while (agentTurnActive) {
-        if (abortSignal.aborted) {
+          let agentTurnActive = true;
           logger.info(
-            `[CoderAgentExecutor] Task ${taskId} aborted before turn. Exiting loop.`,
+            `[CoderAgentExecutor] Task ${taskId}: Processing user turn.`,
           );
-          throw new Error('Execution aborted');
-        }
-        logger.info(
-          `[CoderAgentExecutor] Task ${taskId}: Processing agent turn (LLM stream).`,
-        );
-        const toolCallRequests: ToolCallRequestInfo[] = [];
-        for await (const event of agentEvents) {
-          if (abortSignal.aborted) {
-            logger.warn(
-              `[CoderAgentExecutor] Task ${taskId}: Abort signal received during agent event processing.`,
+          let agentEvents = currentTask.acceptUserMessage(
+            requestContext,
+            abortSignal,
+          );
+
+          while (agentTurnActive) {
+            if (abortSignal.aborted) {
+              logger.info(
+                `[CoderAgentExecutor] Task ${taskId} aborted before turn. Exiting loop.`,
+              );
+              throw new Error('Execution aborted');
+            }
+            logger.info(
+              `[CoderAgentExecutor] Task ${taskId}: Processing agent turn (LLM stream).`,
             );
-            throw new Error('Execution aborted');
-          }
-          if (event.type === GeminiEventType.ToolCallRequest) {
-            toolCallRequests.push(event.value);
-            continue;
-          }
-          await currentTask.acceptAgentMessage(event);
-        }
+            const toolCallRequests: ToolCallRequestInfo[] = [];
+            for await (const event of agentEvents) {
+              if (abortSignal.aborted) {
+                logger.warn(
+                  `[CoderAgentExecutor] Task ${taskId}: Abort signal received during agent event processing.`,
+                );
+                throw new Error('Execution aborted');
+              }
+              if (event.type === GeminiEventType.ToolCallRequest) {
+                toolCallRequests.push(event.value);
+                continue;
+              }
+              await currentTask.acceptAgentMessage(event);
+            }
 
-        if (abortSignal.aborted) throw new Error('Execution aborted');
+            if (abortSignal.aborted) throw new Error('Execution aborted');
 
-        if (toolCallRequests.length > 0) {
-          logger.info(
-            `[CoderAgentExecutor] Task ${taskId}: Found ${toolCallRequests.length} tool call requests. Scheduling as a batch.`,
-          );
-          await currentTask.scheduleToolCalls(toolCallRequests, abortSignal);
-        }
-
-        logger.info(
-          `[CoderAgentExecutor] Task ${taskId}: Waiting for pending tools if any.`,
-        );
-        await currentTask.waitForPendingTools();
-        logger.info(
-          `[CoderAgentExecutor] Task ${taskId}: All pending tools completed or none were pending.`,
-        );
-
-        if (abortSignal.aborted) throw new Error('Execution aborted');
-
-        if (currentTask.hasPendingTools) {
-          logger.info(
-            `[CoderAgentExecutor] Task ${taskId}: There are still ${currentTask.pendingToolsCount} pending tools waiting for approval. Yielding to user.`,
-          );
-          agentTurnActive = false;
-        } else {
-          const completedTools = currentTask.getAndClearCompletedTools();
-
-          if (completedTools.length > 0) {
-            if (completedTools.every((tool) => tool.status === 'cancelled')) {
+            if (toolCallRequests.length > 0) {
               logger.info(
-                `[CoderAgentExecutor] Task ${taskId}: All tool calls were cancelled. Updating history and ending agent turn.`,
+                `[CoderAgentExecutor] Task ${taskId}: Found ${toolCallRequests.length} tool call requests. Scheduling as a batch.`,
               );
-              currentTask.addToolResponsesToHistory(completedTools);
-              agentTurnActive = false;
-              const stateChange: StateChange = {
-                kind: CoderAgentEvent.StateChangeEvent,
-              };
-              currentTask.setTaskStateAndPublishUpdate(
-                'input-required',
-                stateChange,
-                undefined,
-                undefined,
-                true,
-              );
-            } else {
-              logger.info(
-                `[CoderAgentExecutor] Task ${taskId}: Found ${completedTools.length} completed tool calls. Sending results back to LLM.`,
-              );
-
-              agentEvents = currentTask.sendCompletedToolsToLlm(
-                completedTools,
+              await currentTask.scheduleToolCalls(
+                toolCallRequests,
                 abortSignal,
               );
             }
-          } else {
-            logger.info(
-              `[CoderAgentExecutor] Task ${taskId}: No more tool calls to process. Ending agent turn.`,
-            );
-            agentTurnActive = false;
-          }
-        }
-      }
 
-      logger.info(
-        `[CoderAgentExecutor] Task ${taskId}: Agent turn finished, setting to input-required.`,
-      );
-      const stateChange: StateChange = {
-        kind: CoderAgentEvent.StateChangeEvent,
-      };
-      currentTask.setTaskStateAndPublishUpdate(
-        'input-required',
-        stateChange,
-        undefined,
-        undefined,
-        true,
-      );
-    } catch (error) {
-      if (abortSignal.aborted) {
-        logger.warn(`[CoderAgentExecutor] Task ${taskId} execution aborted.`);
-        currentTask.cancelPendingTools('Execution aborted');
-        if (
-          currentTask.taskState !== 'canceled' &&
-          currentTask.taskState !== 'failed'
-        ) {
-          currentTask.setTaskStateAndPublishUpdate(
-            'input-required',
-            { kind: CoderAgentEvent.StateChangeEvent },
-            'Execution aborted by client.',
-            undefined,
-            true,
+            logger.info(
+              `[CoderAgentExecutor] Task ${taskId}: Waiting for pending tools if any.`,
+            );
+            await currentTask.waitForPendingTools();
+            logger.info(
+              `[CoderAgentExecutor] Task ${taskId}: All pending tools completed or none were pending.`,
+            );
+
+            if (abortSignal.aborted) throw new Error('Execution aborted');
+
+            if (currentTask.hasPendingTools) {
+              logger.info(
+                `[CoderAgentExecutor] Task ${taskId}: There are still ${currentTask.pendingToolsCount} pending tools waiting for approval. Yielding to user.`,
+              );
+              agentTurnActive = false;
+            } else {
+              const completedTools = currentTask.getAndClearCompletedTools();
+
+              if (completedTools.length > 0) {
+                if (
+                  completedTools.every((tool) => tool.status === 'cancelled')
+                ) {
+                  logger.info(
+                    `[CoderAgentExecutor] Task ${taskId}: All tool calls were cancelled. Updating history and ending agent turn.`,
+                  );
+                  currentTask.addToolResponsesToHistory(completedTools);
+                  agentTurnActive = false;
+                  const stateChange: StateChange = {
+                    kind: CoderAgentEvent.StateChangeEvent,
+                  };
+                  currentTask.setTaskStateAndPublishUpdate(
+                    'input-required',
+                    stateChange,
+                    undefined,
+                    undefined,
+                    true,
+                  );
+                } else {
+                  logger.info(
+                    `[CoderAgentExecutor] Task ${taskId}: Found ${completedTools.length} completed tool calls. Sending results back to LLM.`,
+                  );
+
+                  agentEvents = currentTask.sendCompletedToolsToLlm(
+                    completedTools,
+                    abortSignal,
+                  );
+                }
+              } else {
+                logger.info(
+                  `[CoderAgentExecutor] Task ${taskId}: No more tool calls to process. Ending agent turn.`,
+                );
+                agentTurnActive = false;
+              }
+            }
+          }
+
+          logger.info(
+            `[CoderAgentExecutor] Task ${taskId}: Agent turn finished, setting to input-required.`,
           );
-        }
-      } else {
-        const errorMessage =
-          error instanceof Error ? error.message : 'Agent execution error';
-        logger.error(
-          `[CoderAgentExecutor] Error executing agent for task ${taskId}:`,
-          error,
-        );
-        currentTask.cancelPendingTools(errorMessage);
-        if (currentTask.taskState !== 'failed') {
           const stateChange: StateChange = {
             kind: CoderAgentEvent.StateChangeEvent,
           };
           currentTask.setTaskStateAndPublishUpdate(
-            'failed',
+            'input-required',
             stateChange,
-            errorMessage,
+            undefined,
             undefined,
             true,
           );
-        }
-      }
-    } finally {
-      cleanupSocketHandlers?.();
+        } catch (error) {
+          if (abortSignal.aborted) {
+            logger.warn(
+              `[CoderAgentExecutor] Task ${taskId} execution aborted.`,
+            );
+            currentTask.cancelPendingTools('Execution aborted');
+            if (
+              currentTask.taskState !== 'canceled' &&
+              currentTask.taskState !== 'failed'
+            ) {
+              currentTask.setTaskStateAndPublishUpdate(
+                'input-required',
+                { kind: CoderAgentEvent.StateChangeEvent },
+                'Execution aborted by client.',
+                undefined,
+                true,
+              );
+            }
+          } else {
+            const errorMessage =
+              error instanceof Error ? error.message : 'Agent execution error';
+            logger.error(
+              `[CoderAgentExecutor] Error executing agent for task ${taskId}:`,
+              error,
+            );
+            currentTask.cancelPendingTools(errorMessage);
+            if (currentTask.taskState !== 'failed') {
+              const stateChange: StateChange = {
+                kind: CoderAgentEvent.StateChangeEvent,
+              };
+              currentTask.setTaskStateAndPublishUpdate(
+                'failed',
+                stateChange,
+                errorMessage,
+                undefined,
+                true,
+              );
+            }
+          }
+        } finally {
+          cleanupSocketHandlers?.();
 
-      if (isPrimaryExecution) {
-        const controllers = this.activeAbortControllers.get(taskId);
-        if (controllers) {
-          controllers.delete(abortController);
-          if (controllers.size === 0) {
-            this.activeAbortControllers.delete(taskId);
+          if (isPrimaryExecution) {
+            const controllers = this.activeAbortControllers.get(taskId);
+            if (controllers) {
+              controllers.delete(abortController);
+              if (controllers.size === 0) {
+                this.activeAbortControllers.delete(taskId);
+              }
+            }
+            this.executingTasks.delete(taskId);
+            logger.info(
+              `[CoderAgentExecutor] Saving final state for task ${taskId}.`,
+            );
+            try {
+              await this.taskStore?.save(wrapper.toSDKTask());
+              logger.info(`[CoderAgentExecutor] Task ${taskId} state saved.`);
+            } catch (saveError) {
+              logger.error(
+                `[CoderAgentExecutor] Failed to save task ${taskId} state in finally block:`,
+                saveError,
+              );
+            }
+
+            if (
+              ['canceled', 'failed', 'completed'].includes(
+                currentTask.taskState,
+              )
+            ) {
+              this.cleanupAndEvictTask(taskId);
+            }
           }
         }
-        this.executingTasks.delete(taskId);
-        logger.info(
-          `[CoderAgentExecutor] Saving final state for task ${taskId}.`,
+      } catch (error) {
+        logger.error(
+          `[CoderAgentExecutor] Failed to execute task ${taskId}:`,
+          error,
         );
-        try {
-          await this.taskStore?.save(wrapper.toSDKTask());
-          logger.info(`[CoderAgentExecutor] Task ${taskId} state saved.`);
-        } catch (saveError) {
-          logger.error(
-            `[CoderAgentExecutor] Failed to save task ${taskId} state in finally block:`,
-            saveError,
-          );
-        }
-
-        if (
-          ['canceled', 'failed', 'completed'].includes(currentTask.taskState)
-        ) {
-          this.cleanupAndEvictTask(taskId);
-        }
+        void pushTaskStateFailed(error, eventBus, taskId, contextId);
+        throw error;
       }
-    }
+    }).catch((error) => {
+      logger.error(
+        `[CoderAgentExecutor] Failed to initialize isolated environment for task ${taskId}:`,
+        error,
+      );
+      if (eventBus) {
+        void pushTaskStateFailed(error, eventBus, taskId, contextId);
+      }
+      throw error;
+    });
   }
 }
