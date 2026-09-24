@@ -1,7 +1,7 @@
 /**
  * @license
- * Copyright 2026 Google LLC
- * SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 gemini-api2cli contributors
+ * SPDX-License-Identifier: LicenseRef-CNC-1.0
  */
 
 import type { UsageInfo } from './adapters/types.js';

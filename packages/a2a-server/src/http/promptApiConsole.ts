@@ -263,6 +263,26 @@ a{color:var(--accent);text-decoration:none}
   .acp-prompt-content{grid-template-columns:1fr}
   .acp-prompt-label{padding-top:0}
 }
+
+/* ── Input Comparison Panel ── */
+.comp-meta-bar{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 10px;align-items:center}
+.comp-stat-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);font-size:12px;color:var(--text2)}
+.comp-stat-val{font-family:var(--mono);font-weight:700;color:var(--text)}
+.comp-stat-pct{font-family:var(--mono);font-weight:700;color:var(--accent)}
+.comp-section{margin-bottom:10px}
+.comp-section:last-child{margin-bottom:0}
+.comp-section-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-size:11.5px;font-weight:600}
+.comp-badge{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700;font-family:var(--mono);text-transform:uppercase}
+.comp-badge-prefix{background:var(--green-bg);color:var(--green);border:1px solid rgba(52,211,153,.25)}
+.comp-badge-prev{background:var(--amber-bg);color:var(--amber);border:1px solid rgba(251,191,36,.25)}
+.comp-badge-latest{background:var(--accent-glow);color:var(--accent);border:1px solid rgba(99,102,241,.25)}
+.comp-section-meta{font-size:11px;color:var(--text3);font-family:var(--mono)}
+.comp-box{font-family:var(--mono);font-size:12px;line-height:1.55;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;white-space:pre-wrap;word-break:break-word;max-height:180px;overflow-y:auto}
+.comp-box.prefix-box{border-left:3px solid var(--green)}
+.comp-box.prev-box{border-left:3px solid var(--amber)}
+.comp-box.latest-box{border-left:3px solid var(--accent)}
+.comp-box.empty-box{color:var(--text3);font-style:italic;padding:8px 12px}
+.comp-meta-req{font-size:11px;color:var(--text3);font-family:var(--mono);display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px}
 </style>
 </head>
 <body>
@@ -516,6 +536,14 @@ a{color:var(--accent);text-decoration:none}
             <span class="toggle-hint" id="t-skills-hint">Enable skill discovery in CLI subprocess</span>
           </label>
         </div>
+        <div style="border-top:1px solid var(--border);margin:4px 0 8px;padding-top:8px">
+          <div style="font-size:12px;color:var(--text3);margin-bottom:8px" id="t-cache-opt-title">Cache & Performance</div>
+          <label class="toggle-row">
+            <input type="checkbox" id="input-comp-toggle"/>
+            <span id="t-input-comp-label">Input Comparison</span>
+            <span class="toggle-hint" id="t-input-comp-hint">Record inputs and compute prefix overlap for cache estimation</span>
+          </label>
+        </div>
         <div class="field">
           <span class="label" id="t-proxy-label">Proxy</span>
           <div class="row" style="gap:8px;align-items:center">
@@ -586,6 +614,24 @@ a{color:var(--accent);text-decoration:none}
         <span class="acp-status-text" id="acp-status-text"></span>
       </div>
     </div>
+
+    <!-- Input Comparison (Cache Estimation) -->
+    <div class="card" id="input-comp-card">
+      <div class="card-header">
+        <div>
+          <div class="row" style="gap:8px;align-items:center">
+            <div class="card-title" id="t-input-comp-title" style="margin-bottom:0">Input Comparison (Cache Estimation)</div>
+            <span class="badge" id="comp-status-badge" style="display:none"></span>
+          </div>
+          <div class="card-desc" id="t-input-comp-desc" style="margin-bottom:0;margin-top:2px">Compare the last two request inputs to inspect the common prefix and divergence points for prompt cache reuse.</div>
+        </div>
+        <div class="row">
+          <button class="btn btn-outline btn-sm" id="refresh-comp-btn">Refresh</button>
+          <button class="btn btn-outline btn-sm" id="clear-comp-btn">Clear</button>
+        </div>
+      </div>
+      <div id="input-comp-content"></div>
+    </div>
   </div>
 
   <!-- Row 5: API Docs -->
@@ -640,6 +686,7 @@ const S = {
   lastCreds: null,
   lastQuotas: null,
   lastSettings: null,
+  lastComparison: null,
 };
 
 const $ = id => document.getElementById(id);
@@ -745,6 +792,9 @@ const I = {
     extensionsHint: 'Load extensions in CLI subprocess',
     skillsLabel: 'Skills',
     skillsHint: 'Enable skill discovery in CLI subprocess',
+    cacheOptTitle: 'Cache & Performance',
+    inputCompLabel: 'Input Comparison',
+    inputCompHint: 'Record inputs and compute prefix overlap for cache estimation (keep off for high throughput)',
     proxyLabel: 'Proxy',
     proxyHint: 'Leave empty to disable',
     proxyPlaceholder: 'http://127.0.0.1:7890',
@@ -801,6 +851,28 @@ const I = {
     epQuotas: 'Get quotas for all credentials.',
     epQuota: 'Get quota for a specific credential.',
     epHealth: 'Health check.',
+    epInputComp: 'Get longest common prefix and divergence comparison of latest two requests.',
+    inputCompTitle: 'Input Comparison (Cache Estimation)',
+    inputCompDesc: 'Compare the last two request inputs to inspect the common prefix and divergence points for prompt cache reuse.',
+    compPrefixLabel: 'Common Prefix',
+    compPrevRemainderLabel: 'Previous Remainder',
+    compLatestRemainderLabel: 'Latest Remainder',
+    compPrefixLen: 'Common Prefix Length',
+    compChars: ' chars',
+    compMatchRatio: 'Match Ratio',
+    compPrevReq: 'Previous Request',
+    compLatestReq: 'Latest Request',
+    compEmptyWaiting: 'Waiting for requests. Send prompts via API to begin comparison.',
+    compWaitingSecond: '1 request recorded. Waiting for the next request to compare.',
+    compExactMatch: '100% exact match — no divergence.',
+    compNoPrefix: '0 common prefix — diverged at character 0.',
+    compCleared: 'Comparison records cleared.',
+    compClearBtn: 'Clear',
+    compDisabledBadge: 'Disabled',
+    compDisabledNotice: 'Input comparison is currently disabled',
+    compDisabledHint: 'Enable it in Request Settings above or set A2A_CONSOLE_INPUT_COMPARISON_ENABLED=true in .env to begin recording request inputs.',
+    compDisabledBanner: 'Input comparison is disabled. Showing last recorded comparison; new requests are not being recorded.',
+    epInputCompDel: 'Clear comparison records.',
     logs: 'Logs',
     logsToggleCollapsed: 'Click to expand',
     logsToggleExpanded: 'Click to collapse',
@@ -945,6 +1017,9 @@ const I = {
     extensionsHint: '在 CLI 子进程中加载扩展',
     skillsLabel: '技能',
     skillsHint: '在 CLI 子进程中启用技能发现',
+    cacheOptTitle: '缓存与性能优化',
+    inputCompLabel: '输入对比',
+    inputCompHint: '记录请求输入并计算最大公共前缀，用于预估 Prompt 缓存复用（高吞吐或中转场景建议关闭）',
     proxyLabel: '代理',
     proxyHint: '留空则不使用代理',
     proxyPlaceholder: 'http://127.0.0.1:7890',
@@ -1001,6 +1076,28 @@ const I = {
     epQuotas: '获取所有凭据的额度。',
     epQuota: '获取指定凭据的额度。',
     epHealth: '健康检查。',
+    epInputComp: '获取最新两次请求的最大公共前缀与分歧对比结果。',
+    inputCompTitle: '输入对比（缓存预估）',
+    inputCompDesc: '对比最新两次请求的输入文本，查看最大公共前缀与分歧点，评估 Prompt 缓存复用。',
+    compPrefixLabel: '公共前缀 (Common Prefix)',
+    compPrevRemainderLabel: '次新输入分歧后部分',
+    compLatestRemainderLabel: '最新输入分歧后部分',
+    compPrefixLen: '公共前缀长度',
+    compChars: ' 字符',
+    compMatchRatio: '重合比例',
+    compPrevReq: '次新请求',
+    compLatestReq: '最新请求',
+    compEmptyWaiting: '暂无请求记录，请通过 API 发送请求以进行对比。',
+    compWaitingSecond: '已记录 1 次请求，等待下一次请求以进行前缀对比。',
+    compExactMatch: '两次输入 100% 完全匹配（无分歧）。',
+    compNoPrefix: '两次输入首字符即发生分歧，公共前缀长度为 0。',
+    compCleared: '已清空对比记录。',
+    compClearBtn: '清空',
+    compDisabledBadge: '已禁用',
+    compDisabledNotice: '输入对比功能当前处于关闭状态',
+    compDisabledHint: '可在上方【请求设置】中勾选开启，或在 .env 中设置 A2A_CONSOLE_INPUT_COMPARISON_ENABLED=true 启动记录。',
+    compDisabledBanner: '输入对比当前已禁用。展示的是最后一次对比记录，后续新请求将不会被记录。',
+    epInputCompDel: '清空输入对比记录。',
     logs: '日志',
     logsToggleCollapsed: '点击展开',
     logsToggleExpanded: '点击收起',
@@ -1162,6 +1259,12 @@ function applyLang() {
   $('t-extensions-hint').textContent = t('extensionsHint');
   $('t-skills-label').textContent = t('skillsLabel');
   $('t-skills-hint').textContent = t('skillsHint');
+  const cacheOptEl = $('t-cache-opt-title');
+  if (cacheOptEl) cacheOptEl.textContent = t('cacheOptTitle');
+  const inputCompLabelEl = $('t-input-comp-label');
+  if (inputCompLabelEl) inputCompLabelEl.textContent = t('inputCompLabel');
+  const inputCompHintEl = $('t-input-comp-hint');
+  if (inputCompHintEl) inputCompHintEl.textContent = t('inputCompHint');
   $('t-proxy-label').textContent = t('proxyLabel');
   $('t-proxy-hint').textContent = t('proxyHint');
   $('proxy-input').placeholder = t('proxyPlaceholder');
@@ -1204,6 +1307,15 @@ function applyLang() {
     $('logs-body').innerHTML = '<div class="logs-empty">'+esc(t('logsEmpty'))+'</div>';
   }
   updateLogsCounter();
+  // Input Comparison
+  const compTitle = $('t-input-comp-title');
+  if (compTitle) compTitle.textContent = t('inputCompTitle');
+  const compDesc = $('t-input-comp-desc');
+  if (compDesc) compDesc.textContent = t('inputCompDesc');
+  const refreshCompBtn = $('refresh-comp-btn');
+  if (refreshCompBtn) refreshCompBtn.textContent = t('refresh');
+  const clearCompBtn = $('clear-comp-btn');
+  if (clearCompBtn) clearCompBtn.textContent = t('compClearBtn');
   // Footer
   $('footer-license-1').innerHTML = t('footerLicense1');
   $('footer-license-2').textContent = t('footerLicense2');
@@ -1212,6 +1324,7 @@ function applyLang() {
   if (S.lastHealth) renderStatus(S.lastHealth, S.lastModels, S.lastCreds);
   if (S.lastCreds) renderCreds({ credentials: S.lastCreds.credentials || S.credentials });
   if (S.lastQuotas) renderQuotas(S.lastQuotas);
+  if (S.lastComparison) renderInputComparison(S.lastComparison);
 }
 
 $('lang-btn').onclick = () => {
@@ -1660,6 +1773,8 @@ function renderEndpoints() {
     ['GET','/v1/quotas',t('epQuotas')],
     ['GET','/v1/quotas/:credentialId',t('epQuota')],
     ['GET','/v1/health',t('epHealth')],
+    ['GET','/v1/input-comparison',t('epInputComp')],
+    ['DELETE','/v1/input-comparison',t('epInputCompDel')],
   ];
   const methodClass = {GET:'ep-get',POST:'ep-post',PUT:'ep-put',DELETE:'ep-delete'};
   $('ep-list').innerHTML = eps.map(([m,p,d])=>
@@ -1684,14 +1799,134 @@ async function refreshQuotas() {
   renderQuotas(await api('/v1/quotas'));
 }
 
+async function refreshInputComparison() {
+  try {
+    const data = await api('/v1/input-comparison');
+    S.lastComparison = data;
+    renderInputComparison(data);
+  } catch (e) {
+    // Non-blocking
+  }
+}
+
+async function clearInputComparison() {
+  try {
+    await api('/v1/input-comparison', { method: 'DELETE' });
+    setNotice(t('compCleared'), true);
+    await refreshInputComparison();
+  } catch (e) {
+    showErr(e);
+  }
+}
+
+function renderInputComparison(data) {
+  const badgeEl = $('comp-status-badge');
+  if (badgeEl) {
+    if (data && data.enabled) {
+      badgeEl.style.display = 'inline-flex';
+      badgeEl.className = 'badge badge-active';
+      badgeEl.textContent = t('active');
+    } else {
+      badgeEl.style.display = 'inline-flex';
+      badgeEl.className = 'badge badge-stored';
+      badgeEl.textContent = t('compDisabledBadge');
+    }
+  }
+
+  const el = $('input-comp-content');
+  if (!el) return;
+  if (!data || !data.hasEnoughData) {
+    if (data && data.enabled === false) {
+      el.innerHTML =
+        '<div class="empty">'+
+          '<div style="font-weight:600;margin-bottom:4px">'+esc(t('compDisabledNotice'))+'</div>'+
+          '<div style="font-size:12px;color:var(--text3)">'+esc(t('compDisabledHint'))+'</div>'+
+        '</div>';
+      return;
+    }
+    if (data && data.latest && !data.previous) {
+      el.innerHTML =
+        '<div class="empty">'+esc(t('compWaitingSecond'))+'</div>'+
+        '<div class="comp-meta-req" style="margin-top:10px">'+
+          '<span>'+esc(t('compLatestReq'))+': <b>'+esc(data.latest.model)+'</b> ('+data.latest.charCount+esc(t('compChars'))+')</span>'+
+        '</div>';
+    } else {
+      el.innerHTML = '<div class="empty">'+esc(t('compEmptyWaiting'))+'</div>';
+    }
+    return;
+  }
+
+  const prevInfo = data.previous ? esc(data.previous.model) + ' (' + data.previous.charCount + esc(t('compChars')) + ')' : '-';
+  const latestInfo = data.latest ? esc(data.latest.model) + ' (' + data.latest.charCount + esc(t('compChars')) + ')' : '-';
+
+  let html = '';
+  if (data.enabled === false) {
+    html += '<div style="margin-bottom:12px;padding:8px 12px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.25);border-radius:6px;font-size:12px;color:var(--amber)">'+
+      esc(t('compDisabledBanner'))+
+    '</div>';
+  }
+  html += '<div class="comp-meta-bar">';
+  html += '<span class="comp-stat-pill">'+esc(t('compPrefixLen'))+': <span class="comp-stat-val">'+data.prefixLength+esc(t('compChars'))+'</span></span>';
+  html += '<span class="comp-stat-pill">'+esc(t('compMatchRatio'))+': <span class="comp-stat-pct">'+data.matchPercentage+'%</span></span>';
+  html += '</div>';
+
+  html += '<div class="comp-meta-req">';
+  html += '<span>'+esc(t('compPrevReq'))+': <b>'+prevInfo+'</b></span>';
+  html += '<span>'+esc(t('compLatestReq'))+': <b>'+latestInfo+'</b></span>';
+  html += '</div>';
+
+  // Common Prefix section
+  html += '<div class="comp-section">';
+  html += '<div class="comp-section-head">';
+  html += '<span class="comp-badge comp-badge-prefix">'+esc(t('compPrefixLabel'))+'</span>';
+  html += '<span class="comp-section-meta">'+data.prefixLength+esc(t('compChars'))+'</span>';
+  html += '</div>';
+  if (data.prefixLength > 0) {
+    html += '<div class="comp-box prefix-box">'+esc(data.commonPrefix)+'</div>';
+  } else {
+    html += '<div class="comp-box prefix-box empty-box">'+esc(t('compNoPrefix'))+'</div>';
+  }
+  html += '</div>';
+
+  // Previous Remainder section
+  html += '<div class="comp-section">';
+  html += '<div class="comp-section-head">';
+  html += '<span class="comp-badge comp-badge-prev">'+esc(t('compPrevRemainderLabel'))+'</span>';
+  html += '<span class="comp-section-meta">'+data.previousRemainder.length+esc(t('compChars'))+'</span>';
+  html += '</div>';
+  if (data.previousRemainder.length > 0) {
+    html += '<div class="comp-box prev-box">'+esc(data.previousRemainder)+'</div>';
+  } else {
+    html += '<div class="comp-box prev-box empty-box">'+esc(t('compExactMatch'))+'</div>';
+  }
+  html += '</div>';
+
+  // Latest Remainder section
+  html += '<div class="comp-section">';
+  html += '<div class="comp-section-head">';
+  html += '<span class="comp-badge comp-badge-latest">'+esc(t('compLatestRemainderLabel'))+'</span>';
+  html += '<span class="comp-section-meta">'+data.latestRemainder.length+esc(t('compChars'))+'</span>';
+  html += '</div>';
+  if (data.latestRemainder.length > 0) {
+    html += '<div class="comp-box latest-box">'+esc(data.latestRemainder)+'</div>';
+  } else {
+    html += '<div class="comp-box latest-box empty-box">'+esc(t('compExactMatch'))+'</div>';
+  }
+  html += '</div>';
+
+  el.innerHTML = html;
+}
+
 async function refreshAll() {
-  await Promise.all([refreshHealth(), refreshQuotas()]);
+  await Promise.all([refreshHealth(), refreshQuotas(), refreshInputComparison()]);
 }
 
 /* ── Actions ── */
 $('refresh-all-btn').onclick = () => refreshAll().catch(showErr);
 $('refresh-creds-btn').onclick = () => refreshHealth().catch(showErr);
 $('refresh-quotas-btn').onclick = () => refreshQuotas().catch(showErr);
+$('refresh-comp-btn').onclick = () => refreshInputComparison().catch(showErr);
+$('clear-comp-btn').onclick = () => clearInputComparison().catch(showErr);
 
 $('start-login-btn').onclick = async () => {
   const btn = $('start-login-btn');
@@ -2036,6 +2271,7 @@ $('save-settings-btn').onclick = async () => {
         mcpEnabled: $('mcp-toggle').checked,
         extensionsEnabled: $('extensions-toggle').checked,
         skillsEnabled: $('skills-toggle').checked,
+        inputComparisonEnabled: $('input-comp-toggle').checked,
         proxyUrl: $('proxy-input').value.trim(),
         maxWorkers: parseInt($('max-workers-input').value, 10) || 0,
         failoverWorkers: parseInt($('failover-workers-input').value, 10) || 0,
@@ -2045,6 +2281,7 @@ $('save-settings-btn').onclick = async () => {
     });
     $('settings-meta').textContent = t('settingsSaved');
     setTimeout(() => { $('settings-meta').textContent = ''; }, 3000);
+    await refreshInputComparison();
   } catch(e) { showErr(e); }
 };
 
@@ -2060,6 +2297,8 @@ async function loadSettings() {
     $('mcp-toggle').checked = !!s.mcpEnabled;
     $('extensions-toggle').checked = !!s.extensionsEnabled;
     $('skills-toggle').checked = !!s.skillsEnabled;
+    const inputCompEl = $('input-comp-toggle');
+    if (inputCompEl) inputCompEl.checked = !!s.inputComparisonEnabled;
     $('proxy-input').value = s.proxyUrl || '';
     $('max-workers-input').value = String(s.maxWorkers || 0);
     $('failover-workers-input').value = String(s.failoverWorkers || 0);
@@ -2621,6 +2860,7 @@ function startAcpAutoRefresh() {
     if (document.visibilityState !== 'visible') return;
     if (!AcpUI.autoRefresh) return;
     void loadAcpStatus();
+    void refreshInputComparison();
   }, AcpUI.POLL_MS);
   setAcpLiveDot(true);
 }

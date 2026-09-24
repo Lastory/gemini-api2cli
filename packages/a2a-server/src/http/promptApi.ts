@@ -63,6 +63,7 @@ import {
   type ContentBlock,
   type SessionNotification,
 } from './acpProcessPool.js';
+import { InputComparisonStore } from './inputComparisonStore.js';
 
 export const PROMPT_API_GEMINI_GENERATE_ROUTE = '/v1/gemini/generateContent';
 export const PROMPT_API_GEMINI_STREAM_ROUTE =
@@ -88,6 +89,7 @@ export const PROMPT_API_CREDENTIAL_COST_RESET_ROUTE =
   '/v1/credentials/:credentialId/cost/reset';
 export const PROMPT_API_CREDENTIAL_COST_ROUTE =
   '/v1/credentials/:credentialId/cost';
+export const PROMPT_API_INPUT_COMPARISON_ROUTE = '/v1/input-comparison';
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const LOGIN_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -231,6 +233,7 @@ type PromptApiSettings = {
    * idle-closed. 0 disables. See {@link AcpPoolSettings.keepaliveIntervalMs}.
    */
   acpKeepaliveIntervalMs: number;
+  inputComparisonEnabled: boolean;
 };
 
 type PromptApiState = {
@@ -242,6 +245,7 @@ type PromptApiState = {
   rotationIndex: number;
   /** credentialId → timestamp when it was last marked unhealthy */
   credentialCooldowns: Map<string, number>;
+  inputComparisonStore: InputComparisonStore;
 };
 
 const CREDENTIAL_COOLDOWN_MS = 60_000; // 1 minute cooldown after 429/auth failure
@@ -384,6 +388,7 @@ function createPromptApiState(
     currentModel: DEFAULT_PROMPT_API_MODEL,
     credentialStore: new PromptCredentialStore(credentialStoreRoot),
     loginJobs: new Map(),
+    inputComparisonStore: new InputComparisonStore(),
     settings: {
       rotationEnabled: parseBooleanEnv(
         process.env['A2A_CONSOLE_ROTATION_ENABLED'] ??
@@ -429,6 +434,10 @@ function createPromptApiState(
       ),
       skillsEnabled: parseBooleanEnv(
         process.env['A2A_CONSOLE_SKILLS_ENABLED'],
+        false,
+      ),
+      inputComparisonEnabled: parseBooleanEnv(
+        process.env['A2A_CONSOLE_INPUT_COMPARISON_ENABLED'],
         false,
       ),
       proxyUrl: process.env['A2A_CONSOLE_PROXY_URL']?.trim() ?? '',
@@ -1449,6 +1458,16 @@ async function getAcpWorkerAndSession(
   return { worker, sessionId, credentialId };
 }
 
+function formatPromptInput(parsed: {
+  prompt: string;
+  systemPrompt?: string;
+}): string {
+  if (parsed.systemPrompt) {
+    return `[System Instruction]\n${parsed.systemPrompt}\n[End System Instruction]\n${parsed.prompt}`;
+  }
+  return parsed.prompt;
+}
+
 function promptToContentBlocks(
   prompt: string,
   systemPrompt?: string,
@@ -2085,6 +2104,13 @@ async function handleAcpJsonRequest(
     parsed.prompt,
     parsed.systemPrompt,
   );
+  if (state.settings.inputComparisonEnabled) {
+    state.inputComparisonStore.recordInput({
+      id: requestId,
+      model,
+      text: formatPromptInput(parsed),
+    });
+  }
 
   const maxAttempts = state.settings.retryEnabled
     ? Math.max(1, state.settings.retryCount + 1)
@@ -2335,6 +2361,13 @@ async function handleAcpStreamingRequest(
     parsed.prompt,
     parsed.systemPrompt,
   );
+  if (state.settings.inputComparisonEnabled) {
+    state.inputComparisonStore.recordInput({
+      id: requestId,
+      model,
+      text: formatPromptInput(parsed),
+    });
+  }
 
   const maxAttempts = state.settings.retryEnabled
     ? Math.max(1, state.settings.retryCount + 1)
@@ -2791,6 +2824,11 @@ export function createPromptApiRouter(
         if (state.settings.skillsEnabled !== newVal)
           acpWorkerSettingsChanged = true;
         state.settings.skillsEnabled = newVal;
+      }
+      if (b['inputComparisonEnabled'] !== undefined) {
+        state.settings.inputComparisonEnabled = Boolean(
+          b['inputComparisonEnabled'],
+        );
       }
       if (b['proxyUrl'] !== undefined) {
         const url = String(b['proxyUrl']).trim();
@@ -3530,6 +3568,18 @@ export function createPromptApiRouter(
 
   router.delete('/v1/acp/workers', async (_req, res) => {
     await state.acpPool.destroyAll();
+    return res.status(200).json({ ok: true });
+  });
+
+  router.get(PROMPT_API_INPUT_COMPARISON_ROUTE, (_req, res) =>
+    res.status(200).json({
+      ...state.inputComparisonStore.getComparison(),
+      enabled: state.settings.inputComparisonEnabled,
+    }),
+  );
+
+  router.delete(PROMPT_API_INPUT_COMPARISON_ROUTE, (_req, res) => {
+    state.inputComparisonStore.clear();
     return res.status(200).json({ ok: true });
   });
 

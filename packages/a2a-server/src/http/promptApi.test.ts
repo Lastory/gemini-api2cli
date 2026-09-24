@@ -39,6 +39,7 @@ import {
   PROMPT_API_MODELS_ROUTE,
   PROMPT_API_QUOTA_ROUTE,
   PROMPT_API_QUOTAS_ROUTE,
+  PROMPT_API_INPUT_COMPARISON_ROUTE,
   type PromptApiDependencies,
 } from './promptApi.js';
 import { PromptCredentialStore } from './promptCredentialStore.js';
@@ -1029,6 +1030,7 @@ describe('Prompt API routes', () => {
       expect(res.body.settings.rotationEnabled).toBe(true);
       expect(res.body.settings.retryEnabled).toBe(true);
       expect(res.body.settings.retryCount).toBe(3);
+      expect(res.body.settings.inputComparisonEnabled).toBe(false);
     });
 
     it('applies rotation, retry, and retry count overrides from env variables', async () => {
@@ -1110,6 +1112,7 @@ describe('Prompt API routes', () => {
       vi.stubEnv('A2A_CONSOLE_MCP_ENABLED', 'true');
       vi.stubEnv('A2A_CONSOLE_EXTENSIONS_ENABLED', 'true');
       vi.stubEnv('A2A_CONSOLE_SKILLS_ENABLED', 'true');
+      vi.stubEnv('A2A_CONSOLE_INPUT_COMPARISON_ENABLED', 'true');
       vi.stubEnv('A2A_CONSOLE_PROXY_URL', 'http://127.0.0.1:8888');
 
       const app = createTestApp({
@@ -1132,6 +1135,7 @@ describe('Prompt API routes', () => {
       expect(res.body.settings.mcpEnabled).toBe(true);
       expect(res.body.settings.extensionsEnabled).toBe(true);
       expect(res.body.settings.skillsEnabled).toBe(true);
+      expect(res.body.settings.inputComparisonEnabled).toBe(true);
       expect(res.body.settings.proxyUrl).toBe('http://127.0.0.1:8888');
     });
 
@@ -1288,6 +1292,146 @@ describe('Prompt API routes', () => {
           },
         },
       });
+    });
+
+    it('does not record input comparison when disabled (default)', async () => {
+      const mockWorker = {
+        prompt: vi.fn().mockResolvedValue({
+          text: 'Hello from mock worker',
+          promptTokens: 10,
+          candidatesTokens: 5,
+          totalTokens: 15,
+        }),
+        cancelPrompt: vi.fn(),
+        destroySession: vi.fn(),
+      };
+
+      const mockAcpPool = {
+        getOrCreate: vi.fn().mockResolvedValue(mockWorker),
+        getAnyIdleWorker: vi.fn().mockReturnValue(undefined),
+      } as unknown as AcpProcessPool;
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+        acpPool: mockAcpPool,
+      });
+
+      const initRes = await request(app).get(PROMPT_API_INPUT_COMPARISON_ROUTE);
+      expect(initRes.status).toBe(200);
+      expect(initRes.body.enabled).toBe(false);
+      expect(initRes.body.hasEnoughData).toBe(false);
+
+      await request(app)
+        .post(PROMPT_API_OPENAI_COMPLETIONS_ROUTE)
+        .send({
+          messages: [{ role: 'user', content: 'Say foo' }],
+          model: 'gemini-2.5-flash',
+        });
+
+      const afterRes = await request(app).get(
+        PROMPT_API_INPUT_COMPARISON_ROUTE,
+      );
+      expect(afterRes.status).toBe(200);
+      expect(afterRes.body.enabled).toBe(false);
+      expect(afterRes.body.hasEnoughData).toBe(false);
+      expect(afterRes.body.latest).toBeUndefined();
+    });
+
+    it('tracks input comparison across consecutive chat requests and allows clearing', async () => {
+      vi.stubEnv('A2A_CONSOLE_INPUT_COMPARISON_ENABLED', 'true');
+
+      const mockWorker = {
+        prompt: vi.fn().mockResolvedValue({
+          text: 'Hello from mock worker',
+          promptTokens: 10,
+          candidatesTokens: 5,
+          totalTokens: 15,
+        }),
+        cancelPrompt: vi.fn(),
+        destroySession: vi.fn(),
+      };
+
+      const mockAcpPool = {
+        getOrCreate: vi.fn().mockResolvedValue(mockWorker),
+        getAnyIdleWorker: vi.fn().mockReturnValue(undefined),
+      } as unknown as AcpProcessPool;
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+        acpPool: mockAcpPool,
+      });
+
+      // 1. Initial check - should be empty but enabled
+      const initRes = await request(app).get(PROMPT_API_INPUT_COMPARISON_ROUTE);
+      expect(initRes.status).toBe(200);
+      expect(initRes.body.enabled).toBe(true);
+      expect(initRes.body.hasEnoughData).toBe(false);
+
+      // 2. First request
+      await request(app)
+        .post(PROMPT_API_OPENAI_COMPLETIONS_ROUTE)
+        .send({
+          messages: [
+            { role: 'system', content: 'You are a test assistant.' },
+            { role: 'user', content: 'Say foo' },
+          ],
+          model: 'gemini-2.5-flash',
+        });
+
+      // 3. Second request with common prefix
+      await request(app)
+        .post(PROMPT_API_OPENAI_COMPLETIONS_ROUTE)
+        .send({
+          messages: [
+            { role: 'system', content: 'You are a test assistant.' },
+            { role: 'user', content: 'Say bar' },
+          ],
+          model: 'gemini-2.5-flash',
+        });
+
+      // 4. Comparison check
+      const compRes = await request(app).get(PROMPT_API_INPUT_COMPARISON_ROUTE);
+      expect(compRes.status).toBe(200);
+      expect(compRes.body.enabled).toBe(true);
+      expect(compRes.body.hasEnoughData).toBe(true);
+      expect(compRes.body.commonPrefix).toContain(
+        '[System Instruction]\nYou are a test assistant.\n[End System Instruction]\nSay ',
+      );
+      expect(compRes.body.previousRemainder).toBe('foo');
+      expect(compRes.body.latestRemainder).toBe('bar');
+      expect(compRes.body.previous.model).toBe('gemini-2.5-flash');
+      expect(compRes.body.latest.model).toBe('gemini-2.5-flash');
+
+      // 5. Clear
+      const clearRes = await request(app).delete(
+        PROMPT_API_INPUT_COMPARISON_ROUTE,
+      );
+      expect(clearRes.status).toBe(200);
+      expect(clearRes.body.ok).toBe(true);
+
+      // 6. After clear
+      const postClearRes = await request(app).get(
+        PROMPT_API_INPUT_COMPARISON_ROUTE,
+      );
+      expect(postClearRes.status).toBe(200);
+      expect(postClearRes.body.enabled).toBe(true);
+      expect(postClearRes.body.hasEnoughData).toBe(false);
+
+      // 7. Toggle off via PUT /v1/settings
+      const putRes = await request(app)
+        .put('/v1/settings')
+        .send({ inputComparisonEnabled: false });
+      expect(putRes.status).toBe(200);
+      expect(putRes.body.settings.inputComparisonEnabled).toBe(false);
+
+      const disabledRes = await request(app).get(
+        PROMPT_API_INPUT_COMPARISON_ROUTE,
+      );
+      expect(disabledRes.body.enabled).toBe(false);
     });
   });
 });

@@ -331,6 +331,11 @@ export default tseslint.config(
       'packages/a2a-server/src/http/promptApiConsole.ts',
       'packages/a2a-server/src/http/promptCredentialStore.ts',
       'packages/a2a-server/src/http/acpProcessPool.ts',
+      'packages/a2a-server/src/http/inputComparisonStore.ts',
+      'packages/a2a-server/src/http/inputComparisonStore.test.ts',
+      'packages/a2a-server/src/http/vertexPricing.ts',
+      'packages/a2a-server/src/http/vertexPricing.test.ts',
+      'packages/a2a-server/src/http/vertexCredential.test.ts',
       'packages/a2a-server/src/http/adapters/*.ts',
     ],
     rules: {
