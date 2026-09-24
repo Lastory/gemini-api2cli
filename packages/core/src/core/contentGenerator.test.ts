@@ -94,6 +94,7 @@ describe('createContentGenerator', () => {
     resetVersionCache();
     vi.clearAllMocks();
     vi.stubEnv('ANTIGRAVITY_CLI_ALIAS', '');
+    vi.stubEnv('GOOGLE_CLOUD_LOCATION', '');
   });
 
   afterEach(() => {
@@ -484,6 +485,82 @@ describe('createContentGenerator', () => {
     );
   });
 
+  it('should use US REP endpoint for Vertex AI when location is us and no baseUrl is provided', async () => {
+    const mockConfig = {
+      getModel: vi.fn().mockReturnValue('gemini-pro'),
+      getProxy: vi.fn().mockReturnValue(undefined),
+      getUsageStatisticsEnabled: () => false,
+      getClientName: vi.fn().mockReturnValue(undefined),
+    } as unknown as Config;
+
+    const mockGenerator = {
+      models: {},
+    } as unknown as GoogleGenAI;
+    vi.mocked(GoogleGenAI).mockImplementation(() => mockGenerator as never);
+
+    vi.stubEnv('GOOGLE_CLOUD_LOCATION', 'us');
+
+    await createContentGenerator(
+      {
+        apiKey: 'test-api-key',
+        vertexai: true,
+        authType: AuthType.USE_VERTEX_AI,
+      },
+      mockConfig,
+    );
+
+    expect(GoogleGenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        googleAuthOptions: expect.objectContaining({
+          clientOptions: expect.objectContaining({
+            apiEndpoint: 'https://aiplatform.us.rep.googleapis.com',
+          }),
+        }),
+        httpOptions: expect.objectContaining({
+          baseUrl: 'https://aiplatform.us.rep.googleapis.com',
+        }),
+      }),
+    );
+  });
+
+  it('should use EU REP endpoint for Vertex AI when location is eu and no baseUrl is provided', async () => {
+    const mockConfig = {
+      getModel: vi.fn().mockReturnValue('gemini-pro'),
+      getProxy: vi.fn().mockReturnValue(undefined),
+      getUsageStatisticsEnabled: () => false,
+      getClientName: vi.fn().mockReturnValue(undefined),
+    } as unknown as Config;
+
+    const mockGenerator = {
+      models: {},
+    } as unknown as GoogleGenAI;
+    vi.mocked(GoogleGenAI).mockImplementation(() => mockGenerator as never);
+
+    vi.stubEnv('GOOGLE_CLOUD_LOCATION', 'eu');
+
+    await createContentGenerator(
+      {
+        apiKey: 'test-api-key',
+        vertexai: true,
+        authType: AuthType.USE_VERTEX_AI,
+      },
+      mockConfig,
+    );
+
+    expect(GoogleGenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        googleAuthOptions: expect.objectContaining({
+          clientOptions: expect.objectContaining({
+            apiEndpoint: 'https://aiplatform.eu.rep.googleapis.com',
+          }),
+        }),
+        httpOptions: expect.objectContaining({
+          baseUrl: 'https://aiplatform.eu.rep.googleapis.com',
+        }),
+      }),
+    );
+  });
+
   // [a2a-server-patch] BEGIN: Tests for Vertex AI routing and timeout injection
   it('should pass Vertex AI routing headers when configured via environment variables', async () => {
     vi.stubEnv('VERTEX_AI_SHARED_REQUEST_TYPE', 'flex');
@@ -570,7 +647,6 @@ describe('createContentGenerator', () => {
     }
   });
   // [a2a-server-patch] END: Tests for Vertex AI routing and timeout injection
-
   it('should inject HttpsProxyAgent into googleAuthOptions when proxy URL uses https://', async () => {
     const mockConfigWithProxy = {
       getModel: vi.fn().mockReturnValue('gemini-pro'),
