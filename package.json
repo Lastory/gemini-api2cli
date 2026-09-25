@@ -1,6 +1,6 @@
 {
   "name": "@google/gemini-cli",
-  "version": "0.56.0",
+  "version": "0.61.0",
   "engines": {
     "node": ">=20.0.0"
   },
@@ -14,7 +14,7 @@
     "url": "git+https://github.com/google-gemini/gemini-cli.git"
   },
   "config": {
-    "sandboxImageUri": "us-docker.pkg.dev/gemini-code-dev/gemini-cli/sandbox:0.56.0"
+    "sandboxImageUri": "us-docker.pkg.dev/gemini-code-dev/gemini-cli/sandbox:0.61.0"
   },
   "scripts": {
     "start": "cross-env NODE_ENV=development node scripts/start.js",
@@ -33,6 +33,7 @@
     "schema:settings": "tsx ./scripts/generate-settings-schema.ts",
     "docs:settings": "tsx ./scripts/generate-settings-doc.ts",
     "docs:keybindings": "tsx ./scripts/generate-keybindings-doc.ts",
+    "eval:validate": "tsx ./scripts/eval-validate-cli.ts",
     "eval:inventory": "tsx ./scripts/eval-inventory-cli.ts",
     "eval:inventory:json": "tsx ./scripts/eval-inventory-cli.ts --json",
     "eval:report": "tsx ./scripts/eval-report-cli.ts",

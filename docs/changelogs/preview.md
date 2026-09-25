@@ -1,6 +1,6 @@
-# Preview release: v0.55.0-preview.1
+# Preview release: v0.60.0-preview.0
 
-Released: August 06, 2026
+Released: September 8, 2026
 
 Our preview release includes the latest, new, and experimental features. This
 release may not be as stable as our [latest weekly release](latest.md).
@@ -13,101 +13,61 @@ npm install -g @google/gemini-cli@preview
 
 ## Highlights
 
-- **Antigravity Agent & PR Generator:** Integrated the Antigravity agent runner,
-  Firestore dual-locking for concurrency, prompt templates, and ingestion
-  testing utilities.
-- **Caretaker Triage & Issue Management:** Enhanced the issue triage workflow by
-  automatically posting a comment before closing issues, and sanitizing and
-  wrapping issue titles in `untrusted_context`.
-- **Core API & Session Stability:** Enforced HTTPS for
-  GoogleCredentialsAuthProvider to prevent cleartext leakage, rotated session
-  IDs on model fallback to prevent stateful API errors, and refined chat history
-  by filtering out thought parts when context management is disabled.
+- **Workspace and Path Safety**: Enhanced path boundary checks, symlink
+  resolution, and mitigation of NTFS 8.3 short name (SFN) bypasses in command
+  safety and file discovery.
+- **Sandbox Isolation**: Isolated settings directories within sandbox containers
+  and temporary directories for macOS Seatbelt sandbox to restrict access.
+- **Extension Loader Hardening**: Hardened path resolution and boundary
+  validation in extension loader, with new consent prompts for runtime
+  environment changes.
+- **Network and OAuth Security**: Improved destination validation and connection
+  routing in web fetch utilities, and enforced RFC 9207 issuer identification in
+  the MCP OAuth flow.
+- **Tool Output Provenance**: Enforced envelope metadata provenance for
+  untrusted tool outputs to guarantee integrity.
 
 ## What's Changed
 
-- chore(release): bump version to 0.55.0-nightly.20260728.gd29268d36 by
+- fix(core): improve destination validation and connection routing in web fetch
+  utilities by @diegogodinezr in
+  [#29120](https://github.com/google-gemini/gemini-cli/pull/29120)
+- fix(core): enforce RFC 9207 issuer identification in MCP OAuth flow by
+  @jvargassanchez-dot in
+  [#29117](https://github.com/google-gemini/gemini-cli/pull/29117)
+- chore(release): bump version to 0.60.0-nightly.20260901.g0bd1d4397 by
   @gemini-cli-robot in
-  [#28569](https://github.com/google-gemini/gemini-cli/pull/28569)
-- Changelog for v0.54.0-preview.0 by @gemini-cli-robot in
-  [#28567](https://github.com/google-gemini/gemini-cli/pull/28567)
-- Changelog for v0.53.0 by @gemini-cli-robot in
-  [#28568](https://github.com/google-gemini/gemini-cli/pull/28568)
-- chore/release: bump version to 0.55.0-nightly.20260729.g3499c84f7 by
-  @gemini-cli-robot in
-  [#28573](https://github.com/google-gemini/gemini-cli/pull/28573)
-- fix(core): classify capacity exhaustion as terminal to prevent retry hangs by
+  [#29162](https://github.com/google-gemini/gemini-cli/pull/29162)
+- Changelog for v0.58.0 by @gemini-cli-robot in
+  [#29161](https://github.com/google-gemini/gemini-cli/pull/29161)
+- fix(cli): isolate temporary directory for macOS Seatbelt sandbox by
+  @jvargassanchez-dot in
+  [#29171](https://github.com/google-gemini/gemini-cli/pull/29171)
+- feat(extensions): harden path resolution and boundary validation in extension
+  loader by @diegogodinezr in
+  [#29169](https://github.com/google-gemini/gemini-cli/pull/29169)
+- Changelog for v0.59.0-preview.0 by @gemini-cli-robot in
+  [#29159](https://github.com/google-gemini/gemini-cli/pull/29159)
+- fix(core): sanitize and remove hardcoded Google CrUX API key in
+  chrome-devtools-mcp by @amelidev in
+  [#29158](https://github.com/google-gemini/gemini-cli/pull/29158)
+- fix(extensions): prompt for consent on environment changes and sanitize
+  runtime-altering environment variables by @amelidev in
+  [#28863](https://github.com/google-gemini/gemini-cli/pull/28863)
+- fix(core): enhance workspace path boundary checks and symlink resolution in
+  command safety and file discovery by @jesussamuel-byte in
+  [#29170](https://github.com/google-gemini/gemini-cli/pull/29170)
+- fix(config): enforce strict permission and ownership checks on system-wide
+  configuration paths by @jesussamuel-byte in
+  [#29115](https://github.com/google-gemini/gemini-cli/pull/29115)
+- fix(core): mitigate NTFS 8.3 short name (SFN) path by @urielefrenvirtusa in
+  [#29116](https://github.com/google-gemini/gemini-cli/pull/29116)
+- fix(cli): isolate settings directory in sandbox containers by
+  @jvargassanchez-dot in
+  [#29216](https://github.com/google-gemini/gemini-cli/pull/29216)
+- fix(core): enforce envelope metadata provenance for untrusted tool outputs by
   @luisfelipe-alt in
-  [#28599](https://github.com/google-gemini/gemini-cli/pull/28599)
-- fix(core,cli): propagate InvalidStreamError details to UI for specific empty
-  response guidance by @DavidAPierce in
-  [#28566](https://github.com/google-gemini/gemini-cli/pull/28566)
-- fix(cli): fall back to embedded macOS seatbelt profiles if missing by
-  @amelidev in [#28551](https://github.com/google-gemini/gemini-cli/pull/28551)
-- feat(pr-generator-core): add environment config parser, command executor,
-  GitHub R… by @joneba-google in
-  [#28435](https://github.com/google-gemini/gemini-cli/pull/28435)
-- feat(pr-generator-orchestrator): implement iterative bug-fixing state machine
-  and container worker entrypoint by @joneba-google in
-  [#28433](https://github.com/google-gemini/gemini-cli/pull/28433)
-- feat(pr-generator-infra): configure Cloud Run job, Workflows definition, and
-  Dockerfile by @joneba-google in
-  [#28431](https://github.com/google-gemini/gemini-cli/pull/28431)
-- fix(release): handle npm dist-tag deletion failures on registries that forbid
-  it by @DavidAPierce in
-  [#28694](https://github.com/google-gemini/gemini-cli/pull/28694)
-- fix(core): stop a new user message fusing into an unanswered tool response by
-  @adamfweidman in
-  [#28700](https://github.com/google-gemini/gemini-cli/pull/28700)
-- fix(core,cli): repair /compress session reload and quota-fallback tool
-  response loss by @adamfweidman in
-  [#28672](https://github.com/google-gemini/gemini-cli/pull/28672)
-- fix(core): preserve functionCall thoughtSignature when stripping thought parts
-  by @sarbojitrana in
-  [#28607](https://github.com/google-gemini/gemini-cli/pull/28607)
-- fix(core): unwrap and parse nested gaxios streaming errors from cause message
-  by @luisfelipe-alt in
-  [#28689](https://github.com/google-gemini/gemini-cli/pull/28689)
-- Changelog for v0.53.0-preview.0 by @gemini-cli-robot in
-  [#28507](https://github.com/google-gemini/gemini-cli/pull/28507)
-- Changelog for v0.52.0 by @gemini-cli-robot in
-  [#28508](https://github.com/google-gemini/gemini-cli/pull/28508)
-- chore(release): bump version to 0.54.0-nightly.20260722.gf743ab579 by
-  @gemini-cli-robot in
-  [#28510](https://github.com/google-gemini/gemini-cli/pull/28510)
-- fix(caretaker): sanitize and wrap issue title in untrusted_context by @chadd28
-  in [#28352](https://github.com/google-gemini/gemini-cli/pull/28352)
-- chore(caretaker): update vitest to v3.2.4 and add package-lock.json files by
-  @chadd28 in [#28409](https://github.com/google-gemini/gemini-cli/pull/28409)
-- fix(core): rotate session ID on model fallback to prevent stateful API errors
-  by @amelidev in
-  [#28469](https://github.com/google-gemini/gemini-cli/pull/28469)
-- feat(caretaker-triage): post comment before auto-closing issues by @chadd28 in
-  [#28411](https://github.com/google-gemini/gemini-cli/pull/28411)
-- fix(core): enforce HTTPS for GoogleCredentialsAuthProvider to prevent
-  cleartext leakage by @amelidev in
-  [#28517](https://github.com/google-gemini/gemini-cli/pull/28517)
-- fix(core): filter out thought parts from getHistoryTurns when context
-  management is disabled by @DavidAPierce in
-  [#28509](https://github.com/google-gemini/gemini-cli/pull/28509)
-- fix(a2a-server): normalize CRLF line endings to LF in getProposedContent by
-  @luisfelipe-alt in
-  [#28531](https://github.com/google-gemini/gemini-cli/pull/28531)
-- fix(core): enforce explicit tag length and validation in file keychain by
-  @luisfelipe-alt in
-  [#28523](https://github.com/google-gemini/gemini-cli/pull/28523)
-- chore/release: bump version to 0.54.0-nightly.20260728.gbef611950 by
-  @gemini-cli-robot in
-  [#28552](https://github.com/google-gemini/gemini-cli/pull/28552)
-- feat(pr-generator-db): implement Firestore concurrency dual-locking and test
-  ingestion utilities by @joneba-google in
-  [#28432](https://github.com/google-gemini/gemini-cli/pull/28432)
-- feat(pr-generator-agent): implement Antigravity agent runner and prompt
-  templates … by @joneba-google in
-  [#28434](https://github.com/google-gemini/gemini-cli/pull/28434)
-- fix(core): skip merged function-response turns when finding the active loop by
-  @adamfweidman in
-  [#28565](https://github.com/google-gemini/gemini-cli/pull/28565)
+  [#29215](https://github.com/google-gemini/gemini-cli/pull/29215)
 
 **Full Changelog**:
-https://github.com/google-gemini/gemini-cli/compare/v0.53.0-preview.0...v0.55.0-preview.1
+https://github.com/google-gemini/gemini-cli/compare/v0.59.0-preview.0...v0.60.0-preview.0
