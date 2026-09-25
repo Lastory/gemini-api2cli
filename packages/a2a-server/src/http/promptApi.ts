@@ -24,12 +24,12 @@ import {
   DEFAULT_GEMINI_FLASH_MODEL,
   DEFAULT_GEMINI_MODEL,
   DEFAULT_GEMINI_MODEL_AUTO,
-  GEMINI_MODEL_ALIAS_AUTO,
   GEMINI_MODEL_ALIAS_FLASH,
   GEMINI_MODEL_ALIAS_FLASH_LITE,
   GEMINI_MODEL_ALIAS_PRO,
+  LATEST_GEMINI_FLASH_LITE_MODEL,
+  LATEST_GEMINI_FLASH_MODEL,
   PREVIEW_GEMINI_3_1_MODEL,
-  PREVIEW_GEMINI_FLASH_MODEL,
   PREVIEW_GEMINI_MODEL,
   PREVIEW_GEMINI_MODEL_AUTO,
   getG1CreditBalance,
@@ -155,10 +155,10 @@ const PROMPT_API_MODEL_OPTIONS = [
     isPreview: false,
   },
   {
-    id: PREVIEW_GEMINI_FLASH_MODEL,
-    label: getDisplayString(PREVIEW_GEMINI_FLASH_MODEL),
+    id: LATEST_GEMINI_FLASH_MODEL,
+    label: getDisplayString(LATEST_GEMINI_FLASH_MODEL),
     kind: 'flash',
-    isPreview: true,
+    isPreview: false,
   },
   {
     id: DEFAULT_GEMINI_FLASH_LITE_MODEL,
@@ -166,22 +166,23 @@ const PROMPT_API_MODEL_OPTIONS = [
     kind: 'flash-lite',
     isPreview: false,
   },
+  {
+    id: LATEST_GEMINI_FLASH_LITE_MODEL,
+    label: getDisplayString(LATEST_GEMINI_FLASH_LITE_MODEL),
+    kind: 'flash-lite',
+    isPreview: false,
+  },
 ] as const;
 const PROMPT_API_MODEL_ALIASES = [
   {
-    id: GEMINI_MODEL_ALIAS_AUTO,
-    label: 'Auto',
-    targetId: PREVIEW_GEMINI_MODEL_AUTO,
-  },
-  {
     id: GEMINI_MODEL_ALIAS_PRO,
     label: 'Pro',
-    targetId: PREVIEW_GEMINI_MODEL,
+    targetId: PREVIEW_GEMINI_3_1_MODEL,
   },
   {
     id: GEMINI_MODEL_ALIAS_FLASH,
     label: 'Flash',
-    targetId: PREVIEW_GEMINI_FLASH_MODEL,
+    targetId: DEFAULT_GEMINI_FLASH_MODEL,
   },
   {
     id: GEMINI_MODEL_ALIAS_FLASH_LITE,
