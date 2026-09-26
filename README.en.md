@@ -53,20 +53,20 @@ Then open the management console:
 http://localhost:41242/manage
 ```
 
-On first visit you will need to enter a token. The default is `root`
-(configurable via environment variable).
+On first visit you will need to enter a token. The default is `root`. For all
+configurable environment variables, please refer to `.env.example` in the root
+directory.
 
-### Environment Variables
+### Updating
 
-| Variable                  | Description                                                     | Default   |
-| ------------------------- | --------------------------------------------------------------- | --------- |
-| `GEMINI_PROMPT_API_TOKEN` | API / Web auth token                                            | `root`    |
-| `CODER_AGENT_PORT`        | Server listen port                                              | `41242`   |
-| `CODER_AGENT_HOST`        | Server bind address                                             | `0.0.0.0` |
-| `ENABLE_A2A`              | Enable A2A agent protocol layer (does not affect API endpoints) | `false`   |
-| `HTTPS_PROXY`             | Proxy server address (also supports `HTTP_PROXY` etc.)          | none      |
+```bash
+git pull
+npm install
+npm run build
+npm run start:a2a-server-dotenv
+```
 
-### Docker Deployment
+### Docker Deployment (Untested, Not Recommended)
 
 #### 1. Clone and build locally
 
@@ -533,6 +533,10 @@ of the prompt-api layer.
 - Auth middleware: `packages/a2a-server/src/http/promptApiAuth.ts`
 - Console page: `packages/a2a-server/src/http/promptApiConsole.ts`
 - Credential store: `packages/a2a-server/src/http/promptCredentialStore.ts`
+- Pricing & cost calculation: `packages/a2a-server/src/http/vertexPricing.ts`
+- Input comparison store: `packages/a2a-server/src/http/inputComparisonStore.ts`
+- Log buffer & sanitization: `packages/a2a-server/src/http/logBuffer.ts`,
+  `packages/a2a-server/src/http/logSanitize.ts`
 - Format adapters: `packages/a2a-server/src/http/adapters/`
 - A2A agent executor: `packages/a2a-server/src/agent/executor.ts` (optional)
 - The runtime still depends on Gemini CLI login state and execution behavior

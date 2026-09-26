@@ -34,7 +34,7 @@ CLI 作为底层执行引擎，在此之上增加了浏览器管理台、Token �
 git clone https://github.com/Lastory/gemini-api2cli
 cd gemini-api2cli
 npm install
-npm run build -w @google/gemini-cli-core -w @google/gemini-cli -w @google/gemini-cli-a2a-server
+npm run build
 npm run start:a2a-server-dotenv
 ```
 
@@ -44,19 +44,19 @@ npm run start:a2a-server-dotenv
 http://localhost:41242/manage
 ```
 
-首次访问需要输入 Token，默认值为 `root`（可通过环境变量修改）。
+首次访问需要输入 Token，默认值为 `root`。完整环境变量配置说明请参考根目录下的
+`.env.example`。
 
-### 部分环境变量
+### 版本更新
 
-| 变量名                    | 说明                                     | 默认值    |
-| ------------------------- | ---------------------------------------- | --------- |
-| `GEMINI_PROMPT_API_TOKEN` | API / Web 鉴权 Token                     | `root`    |
-| `CODER_AGENT_PORT`        | 服务监听端口                             | `41242`   |
-| `CODER_AGENT_HOST`        | 服务绑定地址                             | `0.0.0.0` |
-| `ENABLE_A2A`              | 启用 A2A 代理协议层（不影响 API 接口）   | `false`   |
-| `HTTPS_PROXY`             | 代理服务器地址（也支持 `HTTP_PROXY` 等） | 无        |
+```bash
+git pull
+npm install
+npm run build
+npm run start:a2a-server-dotenv
+```
 
-### Docker 部署
+### Docker 部署（未充分测试，暂不推荐）
 
 #### 1. 克隆并本地构建
 
@@ -64,7 +64,7 @@ http://localhost:41242/manage
 git clone https://github.com/Lastory/gemini-api2cli
 cd gemini-api2cli
 npm install
-npm run build -w @google/gemini-cli-core -w @google/gemini-cli -w @google/gemini-cli-a2a-server
+npm run build
 ```
 
 > TypeScript 编译需要较多内存，在本地完成后再打包 Docker 镜像。
@@ -499,6 +499,9 @@ A2A 代理协议层（`/tasks`、`/.well-known/agent-card.json` 等）默认禁�
 - 鉴权中间件：`packages/a2a-server/src/http/promptApiAuth.ts`
 - 管理台页面：`packages/a2a-server/src/http/promptApiConsole.ts`
 - 凭证存储：`packages/a2a-server/src/http/promptCredentialStore.ts`
+- 计价核算：`packages/a2a-server/src/http/vertexPricing.ts`
+- 输入比对：`packages/a2a-server/src/http/inputComparisonStore.ts`
+- 日志缓冲与脱敏：`packages/a2a-server/src/http/logBuffer.ts`、`packages/a2a-server/src/http/logSanitize.ts`
 - 格式适配器：`packages/a2a-server/src/http/adapters/`
 - A2A 代理执行器：`packages/a2a-server/src/agent/executor.ts`（可选）
 - 运行时依然依赖 Gemini CLI 的登录态与执行链路
