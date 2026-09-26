@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createPromptApiRouter,
   PROMPT_API_OPENAI_COMPLETIONS_ROUTE,
+  PROMPT_API_STANDARD_CHAT_COMPLETIONS_ROUTE,
   PROMPT_API_CONSOLE_ROUTE,
   PROMPT_API_CREDENTIAL_ROUTE,
   PROMPT_API_CREDENTIALS_ROUTE,
@@ -37,6 +38,7 @@ import {
   PROMPT_API_CURRENT_MODEL_ROUTE,
   PROMPT_API_HEALTH_ROUTE,
   PROMPT_API_MODELS_ROUTE,
+  PROMPT_API_OPENAI_MODELS_ROUTE,
   PROMPT_API_QUOTA_ROUTE,
   PROMPT_API_QUOTAS_ROUTE,
   PROMPT_API_INPUT_COMPARISON_ROUTE,
@@ -341,6 +343,15 @@ describe('Prompt API routes', () => {
       known: true,
     });
     expect(modelsResponse.body.sessionPolicy).toBe('per-request');
+    expect(modelsResponse.body.object).toBe('list');
+    expect(Array.isArray(modelsResponse.body.data)).toBe(true);
+    expect(modelsResponse.body.data.length).toBeGreaterThan(0);
+    expect(modelsResponse.body.data[0]).toMatchObject({
+      id: expect.any(String),
+      object: 'model',
+      created: 1700000000,
+      owned_by: 'google',
+    });
     expect(Array.isArray(modelsResponse.body.models)).toBe(true);
     expect(modelsResponse.body.models.length).toBeGreaterThan(0);
     expect(Array.isArray(modelsResponse.body.aliases)).toBe(true);
@@ -1432,6 +1443,156 @@ describe('Prompt API routes', () => {
         PROMPT_API_INPUT_COMPARISON_ROUTE,
       );
       expect(disabledRes.body.enabled).toBe(false);
+    });
+  });
+
+  describe('OpenAI-compatible unified and alias routes', () => {
+    it('returns model list in OpenAI format on standard and alias paths', async () => {
+      const workspaceRoot = mkdtempSync(
+        path.join(tmpdir(), 'gemini-prompt-api-workspace-'),
+      );
+      tempDirs.push(workspaceRoot);
+      const credentialStoreRoot = mkdtempSync(
+        path.join(tmpdir(), 'gemini-prompt-api-creds-'),
+      );
+      tempDirs.push(credentialStoreRoot);
+      const fakeCliEntry = path.join(workspaceRoot, 'fake-cli.js');
+      writeFileSync(fakeCliEntry, 'console.log("ok");');
+
+      const app = createTestApp({
+        cliEntryPath: fakeCliEntry,
+        spawnProcess: vi.fn(),
+        credentialStoreRoot,
+        timeoutMs: 5000,
+      });
+
+      for (const route of [
+        PROMPT_API_MODELS_ROUTE,
+        '/models',
+        PROMPT_API_OPENAI_MODELS_ROUTE,
+        '/v1/openai/models',
+      ]) {
+        const res = await request(app).get(route);
+        expect(res.status).toBe(200);
+        expect(res.body.object).toBe('list');
+        expect(Array.isArray(res.body.data)).toBe(true);
+        expect(res.body.data.length).toBeGreaterThan(0);
+        const flashModel = res.body.data.find(
+          (m: { id: string }) => m.id === 'gemini-2.5-flash',
+        );
+        expect(flashModel).toBeDefined();
+        expect(flashModel).toMatchObject({
+          id: 'gemini-2.5-flash',
+          object: 'model',
+          created: 1700000000,
+          owned_by: 'google',
+        });
+      }
+    });
+
+    it('retrieves single model info and returns 404 for unknown models', async () => {
+      const workspaceRoot = mkdtempSync(
+        path.join(tmpdir(), 'gemini-prompt-api-workspace-'),
+      );
+      tempDirs.push(workspaceRoot);
+      const credentialStoreRoot = mkdtempSync(
+        path.join(tmpdir(), 'gemini-prompt-api-creds-'),
+      );
+      tempDirs.push(credentialStoreRoot);
+      const fakeCliEntry = path.join(workspaceRoot, 'fake-cli.js');
+      writeFileSync(fakeCliEntry, 'console.log("ok");');
+
+      const app = createTestApp({
+        cliEntryPath: fakeCliEntry,
+        spawnProcess: vi.fn(),
+        credentialStoreRoot,
+        timeoutMs: 5000,
+      });
+
+      for (const prefix of [
+        '/v1/models',
+        '/models',
+        '/v1/openai/v1/models',
+        '/v1/openai/models',
+      ]) {
+        const res = await request(app).get(`${prefix}/gemini-2.5-flash`);
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+          id: 'gemini-2.5-flash',
+          object: 'model',
+          created: 1700000000,
+          owned_by: 'google',
+        });
+
+        const notFoundRes = await request(app).get(
+          `${prefix}/unknown-model-xyz`,
+        );
+        expect(notFoundRes.status).toBe(404);
+        expect(notFoundRes.body.error.message).toContain('not found');
+      }
+    });
+
+    it('handles chat completions on standard /v1/chat/completions and alias routes', async () => {
+      const workspaceRoot = mkdtempSync(
+        path.join(tmpdir(), 'gemini-prompt-api-workspace-'),
+      );
+      tempDirs.push(workspaceRoot);
+      const credentialStoreRoot = mkdtempSync(
+        path.join(tmpdir(), 'gemini-prompt-api-creds-'),
+      );
+      tempDirs.push(credentialStoreRoot);
+      const fakeCliEntry = path.join(workspaceRoot, 'fake-cli.js');
+      writeFileSync(fakeCliEntry, 'console.log("ok");');
+
+      const mockWorker = {
+        credentialId: 'default',
+        createSession: vi.fn().mockResolvedValue('test-session-unified'),
+        setSessionModel: vi.fn().mockResolvedValue(undefined),
+        prompt: vi.fn().mockImplementation((_sessionId, _blocks, onUpdate) => {
+          if (onUpdate) {
+            onUpdate({
+              update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: 'Response from model' },
+              },
+            });
+          }
+          return Promise.resolve({ stopReason: 'end_turn' });
+        }),
+        cancelPrompt: vi.fn(),
+        destroySession: vi.fn(),
+      };
+
+      const mockPool = {
+        getOrCreate: vi.fn().mockResolvedValue(mockWorker),
+        getAnyIdleWorker: vi.fn().mockReturnValue(undefined),
+      } as unknown as AcpProcessPool;
+
+      const app = createTestApp({
+        cliEntryPath: fakeCliEntry,
+        spawnProcess: vi.fn(),
+        credentialStoreRoot,
+        timeoutMs: 5000,
+        acpPool: mockPool,
+      });
+
+      for (const route of [
+        PROMPT_API_STANDARD_CHAT_COMPLETIONS_ROUTE,
+        '/chat/completions',
+        '/v1/openai/chat/completions',
+        PROMPT_API_OPENAI_COMPLETIONS_ROUTE,
+      ]) {
+        const res = await request(app)
+          .post(route)
+          .send({
+            messages: [{ role: 'user', content: 'hello' }],
+            model: 'gemini-2.5-flash',
+          });
+
+        expect(res.status).toBe(200);
+        expect(res.body.object).toBe('chat.completion');
+        expect(res.body.choices[0].message.content).toBe('Response from model');
+      }
     });
   });
 });

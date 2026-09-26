@@ -141,11 +141,12 @@ CMD ["node", "packages/a2a-server/dist/src/http/server.js"]
 
 ### 模型
 
-| 方法 | 路径                 | 说明             |
-| ---- | -------------------- | ---------------- |
-| GET  | `/v1/models`         | 获取可用模型列表 |
-| GET  | `/v1/models/current` | 获取当前默认模型 |
-| PUT  | `/v1/models/current` | 设置默认模型     |
+| 方法 | 路径                 | 说明                                                    |
+| ---- | -------------------- | ------------------------------------------------------- |
+| GET  | `/v1/models`         | 获取可用模型列表（同时兼容 OpenAI `data` 格式与管理端） |
+| GET  | `/v1/models/:model`  | 查询指定模型详情（OpenAI 规范）                         |
+| GET  | `/v1/models/current` | 获取当前默认模型                                        |
+| PUT  | `/v1/models/current` | 设置默认模型                                            |
 
 ### 凭证管理
 
@@ -177,9 +178,14 @@ CMD ["node", "packages/a2a-server/dist/src/http/server.js"]
 
 ### OpenAI 兼容接口
 
-| 方法 | 路径                             | 说明                                    |
-| ---- | -------------------------------- | --------------------------------------- |
-| POST | `/v1/openai/v1/chat/completions` | Chat Completions（支持 `stream: true`） |
+标准 Base URL 为
+`http://localhost:41242/v1`（如在 SillyTavern、NextChat 等客户端中使用）。
+
+| 方法 | 路径                   | 说明                                             |
+| ---- | ---------------------- | ------------------------------------------------ |
+| POST | `/v1/chat/completions` | Chat Completions 标准接口（支持 `stream: true`） |
+| GET  | `/v1/models`           | 模型列表（标准 OpenAI 格式，含 `data: [...]`）   |
+| GET  | `/v1/models/:model`    | 模型详情（标准 OpenAI 格式）                     |
 
 ### Worker 进程管理
 
@@ -211,7 +217,7 @@ CMD ["node", "packages/a2a-server/dist/src/http/server.js"]
 **非流式请求：**
 
 ```bash
-curl -X POST http://localhost:41242/v1/openai/v1/chat/completions \
+curl -X POST http://localhost:41242/v1/chat/completions \
   -H "Authorization: Bearer root" \
   -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"你好"}]}'
@@ -220,7 +226,7 @@ curl -X POST http://localhost:41242/v1/openai/v1/chat/completions \
 **流式请求：**
 
 ```bash
-curl -X POST http://localhost:41242/v1/openai/v1/chat/completions \
+curl -X POST http://localhost:41242/v1/chat/completions \
   -H "Authorization: Bearer root" \
   -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"你好"}],"stream":true}'
@@ -229,7 +235,7 @@ curl -X POST http://localhost:41242/v1/openai/v1/chat/completions \
 **带 system prompt：**
 
 ```bash
-curl -X POST http://localhost:41242/v1/openai/v1/chat/completions \
+curl -X POST http://localhost:41242/v1/chat/completions \
   -H "Authorization: Bearer root" \
   -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","messages":[{"role":"system","content":"你是一个翻译助手"},{"role":"user","content":"Hello world"}]}'
@@ -303,12 +309,26 @@ curl -X POST http://localhost:41242/v1/gemini/generateContent \
 ### PowerShell 示例
 
 ```powershell
-# OpenAI 格式
-Invoke-RestMethod -Method Post -Uri "http://localhost:41242/v1/openai/v1/chat/completions" -Headers @{Authorization="Bearer root";"Content-Type"="application/json"} -Body '{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"Hello"}]}'
+# OpenAI 格式（标准路径）
+Invoke-RestMethod -Method Post -Uri "http://localhost:41242/v1/chat/completions" -Headers @{Authorization="Bearer root";"Content-Type"="application/json"} -Body '{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"Hello"}]}'
 
 # Gemini 格式
 Invoke-RestMethod -Method Post -Uri "http://localhost:41242/v1/gemini/generateContent" -Headers @{Authorization="Bearer root";"Content-Type"="application/json"} -Body '{"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}'
 ```
+
+### 第三方客户端接入指引（如 SillyTavern 酒馆、NextChat）
+
+- **以 OpenAI 兼容模式接入（推荐）**：
+  - **API 类型**: `Chat Completion`
+  - **来源 / 协议**: `Custom (OpenAI-compatible)` 或 `OpenAI`
+  - **Custom Endpoint / 反向代理**: `http://127.0.0.1:41242/v1`
+  - **API Key**: 填入配置的 Token（默认 `root`）
+  - 点击
+    **Connect**：前端将顺利通过状态检查显示为绿色“有效（Valid）”，并自动拉取显示全部可用模型。
+- **以 Google AI Studio 模式接入**：
+  - **来源 / 协议**: `Google AI Studio`
+  - **反向代理**: `http://127.0.0.1:41242`
+  - **API Key**: 填入配置的 Token（默认 `root`）
 
 ### 添加 Vertex AI 凭证
 
@@ -474,7 +494,7 @@ Protocol）Worker 进程池。每个凭证对应一个常驻的 CLI 子进程，
 SillyTavern / API 客户端
     │
     ▼
-prompt-api 层（/v1/openai/v1/*, /v1beta/models/*, /v1/gemini/*）
+prompt-api 层（/v1/chat/completions, /v1beta/models/*, /v1/gemini/*）
     │
     ▼
 ACP Worker 进程池

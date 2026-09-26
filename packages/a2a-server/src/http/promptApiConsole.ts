@@ -1985,6 +1985,7 @@ function renderEndpoints() {
   const eps = [
     ['POST','/v1/gemini/generateContent',t('epGeminiGen')],
     ['POST','/v1/gemini/streamGenerateContent',t('epGeminiStream')],
+    ['POST','/v1/chat/completions',t('epOpenai')],
     ['POST','/v1/openai/v1/chat/completions',t('epOpenai')],
     ['GET','/v1/models',t('epModels')],
     ['GET','/v1/models/current',t('epModelsCur')],

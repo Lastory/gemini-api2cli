@@ -69,8 +69,11 @@ export const PROMPT_API_GEMINI_STREAM_ROUTE =
   '/v1/gemini/streamGenerateContent';
 export const PROMPT_API_OPENAI_COMPLETIONS_ROUTE =
   '/v1/openai/v1/chat/completions';
+export const PROMPT_API_STANDARD_CHAT_COMPLETIONS_ROUTE =
+  '/v1/chat/completions';
 export const PROMPT_API_HEALTH_ROUTE = '/v1/health';
 export const PROMPT_API_MODELS_ROUTE = '/v1/models';
+export const PROMPT_API_OPENAI_MODELS_ROUTE = '/v1/openai/v1/models';
 export const PROMPT_API_CURRENT_MODEL_ROUTE = '/v1/models/current';
 export const PROMPT_API_CONSOLE_ROUTE = '/manage';
 export const PROMPT_API_CREDENTIALS_ROUTE = '/v1/credentials';
@@ -596,8 +599,45 @@ function getPromptApiCredentialPayload(
   };
 }
 
+export type OpenAiModelItem = {
+  id: string;
+  object: 'model';
+  created: number;
+  owned_by: string;
+};
+
+export function buildOpenAiModelsList(): OpenAiModelItem[] {
+  const seen = new Set<string>();
+  const list: OpenAiModelItem[] = [];
+  for (const m of PROMPT_API_MODEL_OPTIONS) {
+    if (!seen.has(m.id)) {
+      seen.add(m.id);
+      list.push({
+        id: m.id,
+        object: 'model',
+        created: 1700000000,
+        owned_by: 'google',
+      });
+    }
+  }
+  for (const a of PROMPT_API_MODEL_ALIASES) {
+    if (!seen.has(a.id)) {
+      seen.add(a.id);
+      list.push({
+        id: a.id,
+        object: 'model',
+        created: 1700000000,
+        owned_by: 'google',
+      });
+    }
+  }
+  return list;
+}
+
 function getPromptApiModelsPayload(state: PromptApiState) {
   return {
+    object: 'list',
+    data: buildOpenAiModelsList(),
     currentModel: getPromptApiCurrentModelPayload(state.currentModel),
     sessionPolicy: 'per-request',
     models: PROMPT_API_MODEL_OPTIONS,
@@ -3592,9 +3632,18 @@ export function createPromptApiRouter(
     return res.status(200).json({ ok: true });
   });
 
-  router.get(PROMPT_API_MODELS_ROUTE, (_req, res) => {
+  const modelsListHandler = (_req: Request, res: Response) => {
     res.status(200).json(getPromptApiModelsPayload(state));
-  });
+  };
+
+  for (const route of [
+    PROMPT_API_MODELS_ROUTE,
+    '/models',
+    PROMPT_API_OPENAI_MODELS_ROUTE,
+    '/v1/openai/models',
+  ]) {
+    router.get(route, modelsListHandler);
+  }
 
   router.get(PROMPT_API_CURRENT_MODEL_ROUTE, (_req, res) => {
     res.status(200).json({
@@ -3602,6 +3651,30 @@ export function createPromptApiRouter(
       sessionPolicy: 'per-request',
     });
   });
+
+  const modelRetrieveHandler = (req: Request, res: Response) => {
+    const modelId = req.params['modelId'];
+    const allModels = buildOpenAiModelsList();
+    const found = allModels.find((m) => m.id === modelId);
+    if (!found) {
+      return res.status(404).json({
+        error: {
+          message: `Model '${modelId}' not found`,
+          type: 'invalid_request_error',
+        },
+      });
+    }
+    return res.status(200).json(found);
+  };
+
+  for (const prefix of [
+    '/v1/models',
+    '/models',
+    '/v1/openai/v1/models',
+    '/v1/openai/models',
+  ]) {
+    router.get(`${prefix}/:modelId`, modelRetrieveHandler);
+  }
 
   router.get(PROMPT_API_CREDENTIALS_ROUTE, async (_req, res) => {
     try {
@@ -4136,8 +4209,8 @@ export function createPromptApiRouter(
     }
   });
 
-  // ── OpenAI compatible format route ──
-  router.post(PROMPT_API_OPENAI_COMPLETIONS_ROUTE, async (req, res) => {
+  // ── OpenAI compatible format routes ──
+  const openaiCompletionsHandler = async (req: Request, res: Response) => {
     try {
       if (openaiAdapter.wantsStream(req.body)) {
         return await handleAdaptedStreamingRequest(
@@ -4180,7 +4253,16 @@ export function createPromptApiRouter(
           ),
         );
     }
-  });
+  };
+
+  for (const route of [
+    PROMPT_API_OPENAI_COMPLETIONS_ROUTE,
+    PROMPT_API_STANDARD_CHAT_COMPLETIONS_ROUTE,
+    '/chat/completions',
+    '/v1/openai/chat/completions',
+  ]) {
+    router.post(route, openaiCompletionsHandler);
+  }
 
   // ── Google AI Studio style routes (SillyTavern compatibility) ──
   // SillyTavern appends /v1beta/models/{model}:action to the reverse proxy URL.

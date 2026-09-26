@@ -75,7 +75,11 @@ const PUBLIC_PATHS = new Set([
 const API_PATH_PREFIXES = [
   '/v1/gemini/',
   '/v1/openai/v1/',
+  '/v1/openai/',
+  '/v1/chat/completions',
+  '/chat/completions',
   '/v1/models',
+  '/models',
   '/v1/health',
   '/v1/settings',
   '/v1beta/models',
@@ -87,10 +91,12 @@ export function promptApiAuthMiddleware(
   res: Response,
   next: NextFunction,
 ): void {
-  // Only gate /v1/*, /v1beta/* and /manage paths
+  // Only gate /v1/*, /v1beta/*, /chat/completions, /models, and /manage paths
   if (
     !req.path.startsWith('/v1/') &&
     !req.path.startsWith('/v1beta/') &&
+    !req.path.startsWith('/chat/completions') &&
+    !req.path.startsWith('/models') &&
     req.path !== '/manage'
   ) {
     next();

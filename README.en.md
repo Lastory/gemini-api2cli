@@ -155,11 +155,12 @@ CMD ["node", "packages/a2a-server/dist/src/http/server.js"]
 
 ### Models
 
-| Method | Path                 | Description               |
-| ------ | -------------------- | ------------------------- |
-| GET    | `/v1/models`         | List available models     |
-| GET    | `/v1/models/current` | Get current default model |
-| PUT    | `/v1/models/current` | Set default model         |
+| Method | Path                 | Description                                                  |
+| ------ | -------------------- | ------------------------------------------------------------ |
+| GET    | `/v1/models`         | List available models (compatible with OpenAI `data` format) |
+| GET    | `/v1/models/:model`  | Retrieve single model details (OpenAI format)                |
+| GET    | `/v1/models/current` | Get current default model                                    |
+| PUT    | `/v1/models/current` | Set default model                                            |
 
 ### Credentials
 
@@ -191,9 +192,14 @@ CMD ["node", "packages/a2a-server/dist/src/http/server.js"]
 
 ### OpenAI-Compatible Endpoint
 
-| Method | Path                             | Description                                |
-| ------ | -------------------------------- | ------------------------------------------ |
-| POST   | `/v1/openai/v1/chat/completions` | Chat Completions (supports `stream: true`) |
+Standard Base URL is `http://localhost:41242/v1` (e.g. for SillyTavern,
+NextChat, or OpenAI SDKs).
+
+| Method | Path                   | Description                                                  |
+| ------ | ---------------------- | ------------------------------------------------------------ |
+| POST   | `/v1/chat/completions` | Chat Completions standard endpoint (supports `stream: true`) |
+| GET    | `/v1/models`           | List models (standard OpenAI format with `data: [...]`)      |
+| GET    | `/v1/models/:model`    | Retrieve model details (standard OpenAI format)              |
 
 ### Worker Process Management
 
@@ -226,7 +232,7 @@ All examples below assume the service is running at `localhost:41242` with token
 **Non-streaming:**
 
 ```bash
-curl -X POST http://localhost:41242/v1/openai/v1/chat/completions \
+curl -X POST http://localhost:41242/v1/chat/completions \
   -H "Authorization: Bearer root" \
   -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"Hello"}]}'
@@ -235,7 +241,7 @@ curl -X POST http://localhost:41242/v1/openai/v1/chat/completions \
 **Streaming:**
 
 ```bash
-curl -X POST http://localhost:41242/v1/openai/v1/chat/completions \
+curl -X POST http://localhost:41242/v1/chat/completions \
   -H "Authorization: Bearer root" \
   -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"Hello"}],"stream":true}'
@@ -244,7 +250,7 @@ curl -X POST http://localhost:41242/v1/openai/v1/chat/completions \
 **With system prompt:**
 
 ```bash
-curl -X POST http://localhost:41242/v1/openai/v1/chat/completions \
+curl -X POST http://localhost:41242/v1/chat/completions \
   -H "Authorization: Bearer root" \
   -H "Content-Type: application/json" \
   -d '{"model":"gemini-2.5-pro","messages":[{"role":"system","content":"You are a translator."},{"role":"user","content":"Hello world"}]}'
@@ -318,12 +324,26 @@ curl -X POST http://localhost:41242/v1/gemini/generateContent \
 ### PowerShell Examples
 
 ```powershell
-# OpenAI format
-Invoke-RestMethod -Method Post -Uri "http://localhost:41242/v1/openai/v1/chat/completions" -Headers @{Authorization="Bearer root";"Content-Type"="application/json"} -Body '{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"Hello"}]}'
+# OpenAI format (standard route)
+Invoke-RestMethod -Method Post -Uri "http://localhost:41242/v1/chat/completions" -Headers @{Authorization="Bearer root";"Content-Type"="application/json"} -Body '{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"Hello"}]}'
 
 # Gemini format
 Invoke-RestMethod -Method Post -Uri "http://localhost:41242/v1/gemini/generateContent" -Headers @{Authorization="Bearer root";"Content-Type"="application/json"} -Body '{"contents":[{"role":"user","parts":[{"text":"Hello"}]}]}'
 ```
+
+### Third-Party Client Setup (e.g. SillyTavern, NextChat)
+
+- **Using OpenAI-Compatible Mode (Recommended)**:
+  - **API**: `Chat Completion`
+  - **Source / Protocol**: `Custom (OpenAI-compatible)` or `OpenAI`
+  - **Custom Endpoint / Reverse Proxy**: `http://127.0.0.1:41242/v1`
+  - **API Key**: Your configured Token (default is `root`)
+  - Click **Connect**: The status indicator will turn green ("Valid") and
+    available models will be loaded automatically into the dropdown.
+- **Using Google AI Studio Mode**:
+  - **Source / Protocol**: `Google AI Studio`
+  - **Reverse Proxy**: `http://127.0.0.1:41242`
+  - **API Key**: Your configured Token (default is `root`)
 
 ### Adding Vertex AI Credentials
 
@@ -504,7 +524,7 @@ NDJSON.
 SillyTavern / API Client
     │
     ▼
-prompt-api layer (/v1/openai/v1/*, /v1beta/models/*, /v1/gemini/*)
+prompt-api layer (/v1/chat/completions, /v1beta/models/*, /v1/gemini/*)
     │
     ▼
 ACP Worker Process Pool

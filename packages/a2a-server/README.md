@@ -19,7 +19,7 @@ API 路由。
 - `/v1/credentials*`
 - `/v1/quotas*`
 - `/v1/gemini/*`
-- `/v1/openai/v1/*`
+- `/v1/chat/completions`
 
 ## 目录结构
 
@@ -107,7 +107,9 @@ API 路由。
 
 ### OpenAI 兼容接口
 
-- `POST /v1/openai/v1/chat/completions`
+- `POST /v1/chat/completions`（标准路径，支持 `stream: true`）
+- `GET /v1/models`（标准 OpenAI 格式模型列表）
+- `GET /v1/models/:model`（模型详情）
 
 ## 鉴权说明
 

@@ -69,3 +69,7 @@ temp_agents/
 .claude
 # conductor extension and planning directories
 conductor/
+
+# Local debug files
+console_debug.html
+*_debug.html
