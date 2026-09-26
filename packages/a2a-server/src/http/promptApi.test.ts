@@ -42,7 +42,12 @@ import {
   PROMPT_API_QUOTA_ROUTE,
   PROMPT_API_QUOTAS_ROUTE,
   PROMPT_API_INPUT_COMPARISON_ROUTE,
+  applyCredentialCooldown,
+  isCooledDown,
+  parseQuotaResetTimeStamp,
+  parseRetryDelayMs,
   type PromptApiDependencies,
+  type PromptApiState,
 } from './promptApi.js';
 import { PromptCredentialStore } from './promptCredentialStore.js';
 import type { AcpProcessPool } from './acpProcessPool.js';
@@ -1593,6 +1598,186 @@ describe('Prompt API routes', () => {
         expect(res.body.object).toBe('chat.completion');
         expect(res.body.choices[0].message.content).toBe('Response from model');
       }
+    });
+  });
+
+  describe('applyCredentialCooldown & Quota handling (Scheme B)', () => {
+    it('parseQuotaResetTimeStamp extracts exact timestamp from ErrorInfo details', () => {
+      const errorMsg = JSON.stringify({
+        error: {
+          code: 429,
+          status: 'RESOURCE_EXHAUSTED',
+          details: [
+            {
+              '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+              reason: 'QUOTA_EXHAUSTED',
+              metadata: { quotaResetTimeStamp: '2026-09-26T23:00:00Z' },
+            },
+          ],
+        },
+      });
+      const ts = parseQuotaResetTimeStamp(errorMsg);
+      expect(ts).toBe(Date.parse('2026-09-26T23:00:00Z'));
+    });
+
+    it('parseQuotaResetTimeStamp returns undefined for plain 429 or errors without details (e.g. Vertex AI)', () => {
+      const vertexErr =
+        '{"code":429,"message":"Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details."}';
+      expect(parseQuotaResetTimeStamp(vertexErr)).toBeUndefined();
+
+      const genericErr =
+        '{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Resource exhausted"}';
+      expect(parseQuotaResetTimeStamp(genericErr)).toBeUndefined();
+    });
+
+    it('parseRetryDelayMs parses RetryInfo retryDelay', () => {
+      const errWithRetryInfo = JSON.stringify({
+        error: {
+          code: 429,
+          details: [
+            {
+              '@type': 'type.googleapis.com/google.rpc.RetryInfo',
+              retryDelay: '30s',
+            },
+          ],
+        },
+      });
+      expect(parseRetryDelayMs(errWithRetryInfo)).toBe(30_000);
+
+      const errWithMs = JSON.stringify({
+        details: [
+          {
+            '@type': 'type.googleapis.com/google.rpc.RetryInfo',
+            retryDelay: '500ms',
+          },
+        ],
+      });
+      expect(parseRetryDelayMs(errWithMs)).toBe(500);
+    });
+
+    it('parseRetryDelayMs parses ErrorInfo metadata.quotaResetDelay', () => {
+      const errWithQuotaDelay = JSON.stringify({
+        error: {
+          details: [
+            {
+              '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+              metadata: { quotaResetDelay: '1500ms' },
+            },
+          ],
+        },
+      });
+      expect(parseRetryDelayMs(errWithQuotaDelay)).toBe(1500);
+    });
+
+    it('parseRetryDelayMs parses "Please retry in X" regex from message', () => {
+      const plainMsg = 'Error: Rate limit exceeded. Please retry in 20s.';
+      expect(parseRetryDelayMs(plainMsg)).toBe(20_000);
+    });
+
+    it('applyCredentialCooldown does NOT cool down on plain 429 without timestamps (Vertex AI / transient)', () => {
+      const state = {
+        credentialCooldowns: new Map<string, number>(),
+      } as unknown as PromptApiState;
+
+      const vertexErr = new Error(
+        '{"code":429,"message":"Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details."}',
+      );
+
+      applyCredentialCooldown(
+        state,
+        'cred-vertex-1',
+        'gemini-3.1-pro-preview',
+        vertexErr,
+      );
+
+      expect(
+        isCooledDown(state, 'cred-vertex-1', 'gemini-3.1-pro-preview'),
+      ).toBe(false);
+      expect(state.credentialCooldowns.size).toBe(0);
+    });
+
+    it('applyCredentialCooldown applies exact timestamp cooldown when Google provides quotaResetTimeStamp', () => {
+      const state = {
+        credentialCooldowns: new Map<string, number>(),
+      } as unknown as PromptApiState;
+
+      const futureTime = Date.now() + 10 * 60_000;
+      const futureIso = new Date(futureTime).toISOString();
+      const codeAssistErr = new Error(
+        JSON.stringify({
+          error: {
+            code: 429,
+            details: [
+              {
+                '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+                metadata: { quotaResetTimeStamp: futureIso },
+              },
+            ],
+          },
+        }),
+      );
+
+      applyCredentialCooldown(
+        state,
+        'cred-oauth-1',
+        'gemini-2.5-pro',
+        codeAssistErr,
+      );
+
+      expect(isCooledDown(state, 'cred-oauth-1', 'gemini-2.5-pro')).toBe(true);
+      // Other models on same credential should not be cooled down
+      expect(isCooledDown(state, 'cred-oauth-1', 'gemini-2.5-flash')).toBe(
+        false,
+      );
+    });
+
+    it('applyCredentialCooldown applies delay cooldown when retryDelay is present', () => {
+      const state = {
+        credentialCooldowns: new Map<string, number>(),
+      } as unknown as PromptApiState;
+
+      const delayErr = new Error('Rate limit exceeded. Please retry in 45s.');
+      applyCredentialCooldown(
+        state,
+        'cred-vertex-2',
+        'gemini-2.5-flash',
+        delayErr,
+      );
+
+      expect(isCooledDown(state, 'cred-vertex-2', 'gemini-2.5-flash')).toBe(
+        true,
+      );
+      expect(isCooledDown(state, 'cred-vertex-2', 'gemini-2.5-pro')).toBe(
+        false,
+      );
+    });
+
+    it('applyCredentialCooldown marks credential-wide cooldown on permanent auth failures', () => {
+      const state = {
+        credentialCooldowns: new Map<string, number>(),
+      } as unknown as PromptApiState;
+
+      const authErr = new Error('HTTP 401: Unauthorized: invalid_grant');
+      applyCredentialCooldown(state, 'cred-bad-1', 'gemini-2.5-pro', authErr);
+
+      // Credential-wide blocks any model
+      expect(isCooledDown(state, 'cred-bad-1', 'gemini-2.5-pro')).toBe(true);
+      expect(isCooledDown(state, 'cred-bad-1', 'gemini-2.5-flash')).toBe(true);
+      expect(isCooledDown(state, 'cred-bad-1', 'any-other-model')).toBe(true);
+    });
+
+    it('applyCredentialCooldown does NOT cool down on 5xx upstream errors', () => {
+      const state = {
+        credentialCooldowns: new Map<string, number>(),
+      } as unknown as PromptApiState;
+
+      const upstreamErr = new Error(
+        'HTTP 503: The service is temporarily unavailable',
+      );
+      applyCredentialCooldown(state, 'cred-1', 'gemini-2.5-pro', upstreamErr);
+
+      expect(isCooledDown(state, 'cred-1', 'gemini-2.5-pro')).toBe(false);
+      expect(state.credentialCooldowns.size).toBe(0);
     });
   });
 });

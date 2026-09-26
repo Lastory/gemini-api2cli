@@ -241,7 +241,7 @@ type PromptApiSettings = {
   inputComparisonEnabled: boolean;
 };
 
-type PromptApiState = {
+export type PromptApiState = {
   currentModel: string;
   credentialStore: PromptCredentialStore;
   loginJobs: Map<string, PromptCredentialLoginJob>;
@@ -253,7 +253,6 @@ type PromptApiState = {
   inputComparisonStore: InputComparisonStore;
 };
 
-const CREDENTIAL_COOLDOWN_MS = 60_000; // 1 minute cooldown after 429/auth failure
 type PromptCredentialLoginJob = {
   id: string;
   status: 'awaiting_callback' | 'succeeded' | 'failed';
@@ -1525,12 +1524,9 @@ function promptToContentBlocks(
   return blocks;
 }
 
-// Default cooldown for "Resource has been exhausted (e.g. check quota)"
-// errors where Google didn't include a precise quotaResetTimeStamp.
-// 4 hours mirrors gcli2api's RESOURCE_EXHAUSTED_COOLDOWN_HOURS — long
-// enough to dodge a hot rate limit, short enough that a transient
-// upstream blip doesn't lock a credential out for the whole day.
-const RESOURCE_EXHAUSTED_FALLBACK_MS = 4 * 60 * 60_000;
+// Cooldown duration for permanent auth failures (400/401/403, invalid_grant,
+// expired refresh token) before operator intervention/re-login.
+const AUTH_FAILURE_COOLDOWN_MS = 4 * 60 * 60_000;
 
 /**
  * Cooldown key. We track at credential + model granularity rather
@@ -1656,7 +1652,19 @@ function extractCandidateText(body: unknown): string {
   return text.slice(0, 60);
 }
 
-function parseQuotaResetMs(errorMsg: string): number | undefined {
+function parseDurationInMs(duration: string): number | null {
+  if (duration.endsWith('ms')) {
+    const milliseconds = parseFloat(duration.slice(0, -2));
+    return isNaN(milliseconds) ? null : milliseconds;
+  }
+  if (duration.endsWith('s')) {
+    const seconds = parseFloat(duration.slice(0, -1));
+    return isNaN(seconds) ? null : seconds * 1000;
+  }
+  return null;
+}
+
+export function parseQuotaResetTimeStamp(errorMsg: string): number | undefined {
   // Find the first `{` and try parsing from there — message often has
   // a prefix like "Error from CLI: {...json...}".
   const start = errorMsg.indexOf('{');
@@ -1686,21 +1694,7 @@ function parseQuotaResetMs(errorMsg: string): number | undefined {
   }
 
   const details = err['details'];
-  if (!Array.isArray(details)) {
-    // Fallback: status + message pattern → 4 h cooldown (gcli2api parity).
-    const statusVal = err['status'];
-    const codeVal = err['code'];
-    const messageVal = err['message'];
-    const isResourceExhausted =
-      statusVal === 'RESOURCE_EXHAUSTED' ||
-      codeVal === 429 ||
-      (typeof messageVal === 'string' &&
-        messageVal.toLowerCase().includes('resource has been exhausted'));
-    if (isResourceExhausted) {
-      return Date.now() + RESOURCE_EXHAUSTED_FALLBACK_MS;
-    }
-    return undefined;
-  }
+  if (!Array.isArray(details)) return undefined;
 
   for (const detail of details) {
     if (!isRecord(detail)) continue;
@@ -1716,18 +1710,68 @@ function parseQuotaResetMs(errorMsg: string): number | undefined {
   return undefined;
 }
 
+export function parseRetryDelayMs(errorMsg: string): number | undefined {
+  const start = errorMsg.indexOf('{');
+  if (start >= 0) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(errorMsg.slice(start));
+    } catch {
+      // ignore
+    }
+    if (isRecord(parsed)) {
+      const innerError = parsed['error'];
+      const err = isRecord(innerError) ? innerError : parsed;
+      const details = err['details'];
+      if (Array.isArray(details)) {
+        for (const detail of details) {
+          if (!isRecord(detail)) continue;
+          if (detail['@type'] === 'type.googleapis.com/google.rpc.RetryInfo') {
+            const delayVal = detail['retryDelay'];
+            if (typeof delayVal === 'string') {
+              const ms = parseDurationInMs(delayVal);
+              if (ms !== null && ms > 0) return ms;
+            }
+          }
+          if (detail['@type'] === 'type.googleapis.com/google.rpc.ErrorInfo') {
+            const md = detail['metadata'];
+            if (isRecord(md)) {
+              const delayVal = md['quotaResetDelay'];
+              if (typeof delayVal === 'string') {
+                const ms = parseDurationInMs(delayVal);
+                if (ms !== null && ms > 0) return ms;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const match = errorMsg.match(/Please retry in ([0-9.]+(?:ms|s))/i);
+  if (match?.[1]) {
+    const ms = parseDurationInMs(match[1]);
+    if (ms !== null && ms > 0) return ms;
+  }
+
+  return undefined;
+}
+
 /**
  * Mark a credential (optionally for a specific model) as in cooldown.
- * The cooldown duration is computed in priority order:
- *   1. Google's `quotaResetTimeStamp` if present in the error body
- *      (Gemini tells us *exactly* when the quota window flips —
- *      respecting it means we can re-use the credential the moment
- *      Google itself starts accepting calls again).
- *   2. RESOURCE_EXHAUSTED fallback (4 h) if the error matches the
- *      pattern but no precise timestamp came back.
- *   3. CREDENTIAL_COOLDOWN_MS for generic retryable errors.
+ *
+ * Rules:
+ *   1. Auth failures (400/401/403, invalid_grant) -> credential-wide cooldown
+ *      ('*') for AUTH_FAILURE_COOLDOWN_MS (requires re-login).
+ *   2. Upstream 5xx errors -> transient Google blip, NOT cooled down.
+ *   3. Quota / 429:
+ *      - If Google provides a precise `quotaResetTimeStamp`, cool down until that time.
+ *      - If Google provides a `retryDelay` (RetryInfo / Please retry in), cool down for that delay.
+ *      - If no server reset time is given (standard Vertex AI or transient 429), DO NOT
+ *        cool down. CLI internal backoff retries within the turn, and ACP in-request
+ *        failover handles switching to other credentials without artificial lockout.
  */
-function applyCredentialCooldown(
+export function applyCredentialCooldown(
   state: PromptApiState,
   credentialId: string,
   model: string,
@@ -1736,12 +1780,10 @@ function applyCredentialCooldown(
   const msg = extractErrorMessage(err);
   const lowerMsg = msg.toLowerCase();
 
-  // Status-code-based decisions, mirroring gcli2api's
-  // _is_permanent_refresh_failure: 400 / 401 / 403 mean the credential
+  // Status-code-based decisions: 400 / 401 / 403 mean the credential
   // is genuinely broken and should be cooled down credential-wide
-  // (block every model, not just the one we just failed on) — at the
-  // RESOURCE_EXHAUSTED fallback duration so admins have time to spot
-  // it. 5xx are upstream Google issues; do NOT cool the credential.
+  // (block every model, not just the one we just failed on).
+  // 5xx are upstream Google issues; do NOT cool the credential.
   if (
     /\b40[01]\b/.test(msg) ||
     /\b403\b/.test(msg) ||
@@ -1751,7 +1793,7 @@ function applyCredentialCooldown(
   ) {
     state.credentialCooldowns.set(
       cooldownKey(credentialId, '*'),
-      Date.now() + RESOURCE_EXHAUSTED_FALLBACK_MS,
+      Date.now() + AUTH_FAILURE_COOLDOWN_MS,
     );
     logger.warn(
       `[ACP] Credential ${credentialId} marked unhealthy (auth/permanent error): ${msg.slice(0, 200)}`,
@@ -1769,26 +1811,43 @@ function applyCredentialCooldown(
     return;
   }
 
-  // Quota / 429 path — try precise timestamp first, fall back to
-  // the gcli2api-style 4 h window, finally the original 60 s.
-  const resetMs = parseQuotaResetMs(msg);
-  if (typeof resetMs === 'number' && resetMs > Date.now()) {
-    state.credentialCooldowns.set(cooldownKey(credentialId, model), resetMs);
-    const seconds = Math.ceil((resetMs - Date.now()) / 1000);
-    logger.info(
-      `[ACP] Credential ${credentialId} model ${model} cooled down until ${new Date(resetMs).toISOString()} (~${seconds}s, from quotaResetTimeStamp)`,
-    );
-    return;
-  }
+  // Quota / 429 path — respect exact reset timestamp or explicit retry delay from Google.
+  const isQuotaError =
+    /\b429\b/.test(msg) ||
+    lowerMsg.includes('resource exhausted') ||
+    lowerMsg.includes('resource_exhausted') ||
+    lowerMsg.includes('rate limit') ||
+    lowerMsg.includes('quota');
 
-  // Generic retry — short cooldown, only on this credential+model.
-  state.credentialCooldowns.set(
-    cooldownKey(credentialId, model),
-    Date.now() + CREDENTIAL_COOLDOWN_MS,
-  );
-  logger.info(
-    `[ACP] Credential ${credentialId} model ${model} cooled down for ${CREDENTIAL_COOLDOWN_MS / 1000}s (generic retry)`,
-  );
+  if (isQuotaError) {
+    const resetMs = parseQuotaResetTimeStamp(msg);
+    if (typeof resetMs === 'number' && resetMs > Date.now()) {
+      state.credentialCooldowns.set(cooldownKey(credentialId, model), resetMs);
+      const seconds = Math.ceil((resetMs - Date.now()) / 1000);
+      logger.info(
+        `[ACP] Credential ${credentialId} model ${model} cooled down until ${new Date(resetMs).toISOString()} (~${seconds}s, from quotaResetTimeStamp)`,
+      );
+      return;
+    }
+
+    const retryDelayMs = parseRetryDelayMs(msg);
+    if (typeof retryDelayMs === 'number' && retryDelayMs > 0) {
+      const expiry = Date.now() + retryDelayMs;
+      state.credentialCooldowns.set(cooldownKey(credentialId, model), expiry);
+      const seconds = Math.ceil(retryDelayMs / 1000);
+      logger.info(
+        `[ACP] Credential ${credentialId} model ${model} cooled down for ${seconds}s (from retryDelay)`,
+      );
+      return;
+    }
+
+    // 429 without explicit server reset time (e.g. Vertex AI per-minute RPM, or transient burst):
+    // Do NOT set a persistent cooldown. CLI internal retry handles backoff, and
+    // failover handles rotating credentials for this request.
+    logger.info(
+      `[ACP] Credential ${credentialId} model ${model} hit 429 without reset timestamp, skipping cooldown`,
+    );
+  }
 }
 
 /**
@@ -2305,13 +2364,9 @@ async function handleAcpJsonRequest(
             .json(adapter.buildJsonError(lastError, 500, model, requestId));
         }
 
-        // Mark the credential as unhealthy. applyCredentialCooldown
-        // picks the right cooldown duration:
-        //   - Google's quotaResetTimeStamp when present (precise)
-        //   - 4 h on RESOURCE_EXHAUSTED without timestamp
-        //   - 60 s otherwise
-        // and chooses per-model vs credential-wide based on whether
-        // the error is auth (4xx) or quota (429).
+        // Mark the credential as unhealthy if Google provided an explicit
+        // quotaResetTimeStamp or retryDelay, or if this is an auth failure.
+        // For plain 429s without server timestamps, no persistent cooldown is set.
         applyCredentialCooldown(state, worker.credentialId, model, err);
         if (!isCredentialFailoverError(err) || attempt + 1 >= maxAttempts) {
           return res
@@ -2599,11 +2654,9 @@ async function handleAcpStreamingRequest(
           return;
         }
 
-        // Mark credential as unhealthy on failover-eligible errors.
-        // The cooldown duration comes from Google's own
-        // quotaResetTimeStamp when present (precise per-quota recovery
-        // window) and falls back to a fixed CREDENTIAL_COOLDOWN_MS for
-        // generic retryable errors.
+        // Mark credential as unhealthy if Google provided an explicit
+        // quotaResetTimeStamp or retryDelay, or if this is an auth failure.
+        // For plain 429s without server timestamps, no persistent cooldown is set.
         applyCredentialCooldown(state, worker.credentialId, model, err);
 
         // Can only failover if no chunks were sent yet
@@ -3298,8 +3351,8 @@ export function createPromptApiRouter(
       }
 
       // ── 429: quota exhausted ─────────────────────────────────────
-      // Use the existing parser to extract Google's
-      // quotaResetTimeStamp and apply a precise cooldown.
+      // If Google provided a precise quotaResetTimeStamp or retryDelay,
+      // apply it. Otherwise, report 429 without artificial cooldown.
       if (httpStatus === 429) {
         const synthErr = new Error(`HTTP 429: ${bodyText}`);
         applyCredentialCooldown(state, credentialId, requestModel, synthErr);
@@ -3310,12 +3363,14 @@ export function createPromptApiRouter(
         const lead = updatedCooldowns.find((c) => c.model === requestModel);
         const remaining = lead
           ? `${Math.ceil(lead.secondsRemaining / 60)} min`
-          : 'unknown';
+          : undefined;
         return res.status(200).json({
           ok: false,
           credentialId,
           durationMs,
-          error: `Quota exhausted (HTTP 429) — recovers in ${remaining}`,
+          error: remaining
+            ? `Quota exhausted (HTTP 429) — recovers in ${remaining}`
+            : 'Quota exhausted (HTTP 429)',
           cooldowns: updatedCooldowns,
         });
       }
