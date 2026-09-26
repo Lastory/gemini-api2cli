@@ -120,6 +120,33 @@ describe('Vertex AI Pricing & Cost Estimation', () => {
       expect(result.cachedCostUsd).toBeCloseTo(0.001, 6);
       expect(result.totalCostUsd).toBeCloseTo(0.0035, 6);
     });
+
+    it('accurately breaks down hit, miss, and out costs for gemini-3.1-pro-preview', () => {
+      // 81,055 cached tokens (hit), 4,967 uncached input tokens (miss), 4,929 billable output tokens (out)
+      const usage: UsageInfo = {
+        inputTokens: 86_022,
+        cachedReadTokens: 81_055,
+        outputTokens: 2_000,
+        thoughtTokens: 2_929,
+        totalTokens: 90_951,
+      };
+
+      const result = estimateVertexCost(
+        'gemini-3.1-pro-preview',
+        usage,
+        'standard',
+      );
+
+      // gemini-3.1-pro-preview standard rates:
+      // cachedInputPricePer1M = 0.2 -> 81,055 / 1M * 0.2 = $0.016211 -> toFixed(4) = '0.0162'
+      // inputPricePer1M = 2.0 -> 4,967 / 1M * 2.0 = $0.009934 -> toFixed(4) = '0.0099'
+      // outputPricePer1M = 12.0 -> 4,929 / 1M * 12.0 = $0.059148 -> toFixed(4) = '0.0591'
+      // total = 0.016211 + 0.009934 + 0.059148 = $0.085293 -> toFixed(4) = '0.0853'
+      expect(result.cachedCostUsd.toFixed(4)).toBe('0.0162');
+      expect(result.inputCostUsd.toFixed(4)).toBe('0.0099');
+      expect(result.outputCostUsd.toFixed(4)).toBe('0.0591');
+      expect(result.totalCostUsd.toFixed(4)).toBe('0.0853');
+    });
   });
 
   describe('estimateVertexCost - Service Tiers (Standard, Flex, Priority)', () => {

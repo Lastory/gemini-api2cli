@@ -1913,7 +1913,7 @@ async function trackVertexCostIfApplicable(
         costResult.totalCostUsd,
       );
       logger.info(
-        `[Prompt API] Tracked Vertex cost for credential ${credentialId} (${model}): $${costResult.totalCostUsd.toFixed(6)} USD (input: $${costResult.inputCostUsd.toFixed(6)}, output: $${costResult.outputCostUsd.toFixed(6)})`,
+        `[Prompt API] Tracked Vertex cost for credential ${credentialId} (${model}): $${costResult.totalCostUsd.toFixed(4)} USD (hit: $${costResult.cachedCostUsd.toFixed(4)}, miss: $${costResult.inputCostUsd.toFixed(4)}, out: $${costResult.outputCostUsd.toFixed(4)})`,
       );
     }
   } catch (err) {

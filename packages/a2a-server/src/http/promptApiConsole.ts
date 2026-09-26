@@ -389,45 +389,98 @@ a{color:var(--accent);text-decoration:none}
   <!-- Vertex AI Section -->
   <div id="cred-add-vertex" class="card" style="margin-bottom:16px;display:none">
     <div class="card-title" id="t-add-vertex-title">Add Vertex AI Credential</div>
-    <div class="card-desc" id="t-add-vertex-desc">Add a Google Cloud Vertex AI credential using a Service Account or API key.</div>
+    <div class="card-desc" id="t-add-vertex-desc">Add a Google Cloud Vertex AI credential using a Service Account, API key, or system ADC.</div>
     <div class="stack" style="max-width:800px">
-      <div class="grid grid-2" style="gap:12px">
-        <div class="field">
-          <span class="label" id="t-vertex-cred-label">Credential Label</span>
-          <input id="vertex-label" class="input" placeholder="e.g. GCP Production"/>
+
+      <!-- 1. Required Configuration -->
+      <div style="border-bottom:1px solid var(--border);padding-bottom:16px;margin-bottom:2px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+          <span style="font-size:12px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.05em" id="t-vertex-req-section">Required Configuration</span>
+          <span class="badge badge-active" style="font-size:10px;padding:1px 7px" id="t-badge-required">Required</span>
         </div>
-        <div class="field">
-          <span class="label" id="t-vertex-project">GCP Project ID</span>
-          <input id="vertex-project" class="input" placeholder="e.g. my-gcp-project-123"/>
+        <div class="grid grid-2" style="gap:12px">
+          <div class="field" style="margin-bottom:0">
+            <span class="label" id="t-vertex-cred-label">Credential Label</span>
+            <input id="vertex-label" class="input" placeholder="e.g. GCP Production"/>
+          </div>
+          <div class="field" style="margin-bottom:0">
+            <span class="label" id="t-vertex-project">GCP Project ID</span>
+            <input id="vertex-project" class="input" placeholder="e.g. my-project-12345"/>
+          </div>
+          <div class="field" style="margin-bottom:0">
+            <span class="label" id="t-vertex-location">Location / Region</span>
+            <input id="vertex-location" class="input" value="us-central1" placeholder="e.g. us-central1"/>
+          </div>
+          <div class="field" style="margin-bottom:0">
+            <span class="label" id="t-vertex-service-tier">Service Tier</span>
+            <select id="vertex-service-tier" class="input">
+              <option id="opt-tier-flex" value="flex">Flex (Cost-optimized — 50% discount, sheddable)</option>
+              <option id="opt-tier-standard" value="standard" selected>Standard (Default — standard price &amp; latency)</option>
+              <option id="opt-tier-priority" value="priority">Priority (Latency-optimized — non-sheddable premium)</option>
+            </select>
+          </div>
         </div>
       </div>
-      <div class="grid grid-2" style="gap:12px">
-        <div class="field">
-          <span class="label" id="t-vertex-location">Location / Region</span>
-          <input id="vertex-location" class="input" value="us-central1" placeholder="e.g. us-central1"/>
+
+      <!-- 2. Authentication Mode (Choose 1 of 3) -->
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:12px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.05em" id="t-vertex-auth-section">Authentication Mode</span>
+            <span class="badge" style="background:var(--amber-bg);color:var(--amber);font-size:10px;padding:1px 7px" id="t-vertex-auth-mode-badge">Choose 1 of 3</span>
+          </div>
         </div>
-        <div class="field">
-          <span class="label" id="t-vertex-api-key">Vertex API Key (Optional)</span>
-          <input id="vertex-api-key" class="input" placeholder="Leave empty if using Service Account or ADC"/>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:12px;line-height:1.5" id="t-vertex-auth-desc">
+          <strong>Selection Logic:</strong> Choose <strong>one</strong> of the three authentication modes below. Fill either Service Account JSON or API Key. If both are left empty, system Application Default Credentials (ADC) will be used automatically. Do not mix both.
+        </div>
+
+        <div class="row" style="gap:8px;margin-bottom:12px" id="vertex-auth-tabs">
+          <button type="button" class="btn btn-primary btn-sm" id="vertex-auth-tab-sa">Service Account JSON (Recommended)</button>
+          <button type="button" class="btn btn-outline btn-sm" id="vertex-auth-tab-key">Vertex API Key</button>
+          <button type="button" class="btn btn-outline btn-sm" id="vertex-auth-tab-adc">System ADC (Leave Empty)</button>
+        </div>
+
+        <!-- Panel 1: Service Account Key JSON -->
+        <div id="vertex-auth-panel-sa">
+          <div style="font-size:12px;color:var(--text2);margin-bottom:6px" id="t-vertex-sa-hint">
+            Paste the complete service-account.json downloaded from Google Cloud IAM:
+          </div>
+          <textarea id="vertex-sa-json" class="textarea" placeholder="Paste service account key.json contents here..." style="min-height:90px"></textarea>
+        </div>
+
+        <!-- Panel 2: Vertex API Key -->
+        <div id="vertex-auth-panel-key" style="display:none">
+          <div style="font-size:12px;color:var(--text2);margin-bottom:6px" id="t-vertex-api-key-hint">
+            Enter the Vertex AI API Key created in Google Cloud Console Credentials page:
+          </div>
+          <input id="vertex-api-key" class="input" placeholder="Enter Vertex API Key (e.g. AIzaSy...)"/>
+        </div>
+
+        <!-- Panel 3: System Default Credentials (ADC) -->
+        <div id="vertex-auth-panel-adc" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;font-size:12px;color:var(--text2);line-height:1.6">
+          <div style="font-weight:600;color:var(--green);margin-bottom:4px" id="t-vertex-adc-title">✔ System ADC mode selected (no key file required)</div>
+          <div id="t-vertex-adc-desc">No key is required. The server will automatically use the Google Cloud Application Default Credentials (ADC) configured in the local environment (e.g. <code>gcloud auth application-default login</code> or GCE/Cloud Run instance service account).</div>
         </div>
       </div>
-      <div class="field">
-        <span class="label" id="t-vertex-base-url">Custom Base URL (Optional)</span>
-        <input id="vertex-base-url" class="input" placeholder="e.g. https://us-central1-aiplatform.googleapis.com"/>
+
+      <!-- 3. Advanced Network Configuration (Optional) -->
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:12px;font-weight:700;color:var(--text);text-transform:uppercase;letter-spacing:.05em" id="t-vertex-network-section">Advanced Network Configuration</span>
+            <span class="badge badge-stored" style="font-size:10px;padding:1px 7px" id="t-vertex-optional-badge">Optional</span>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--text3);margin-bottom:10px;line-height:1.5" id="t-vertex-base-url-desc">
+          <strong>Selection Logic:</strong> Completely independent optional setting. Only fill this when routing requests through a private gateway or custom reverse proxy. <strong>Leave empty when connecting directly to official Google endpoints.</strong>
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <span class="label" id="t-vertex-base-url">Custom Base URL</span>
+          <input id="vertex-base-url" class="input" placeholder="e.g. https://us-central1-aiplatform.googleapis.com (leave empty for direct connection)"/>
+        </div>
       </div>
-      <div class="field">
-        <span class="label" id="t-vertex-service-tier">Service Tier (Latency & Cost)</span>
-        <select id="vertex-service-tier" class="input">
-          <option id="opt-tier-flex" value="flex">Flex (Cost-optimized — 50% discount, sheddable)</option>
-          <option id="opt-tier-standard" value="standard" selected>Standard (Default — standard price & latency)</option>
-          <option id="opt-tier-priority" value="priority">Priority (Latency-optimized — non-sheddable premium)</option>
-        </select>
-      </div>
-      <div class="field">
-        <span class="label" id="t-vertex-sa-json">Service Account JSON (Optional)</span>
-        <textarea id="vertex-sa-json" class="textarea" placeholder="Paste the complete contents of your service-account.json here (or leave empty to use system ADC)..." style="min-height:100px"></textarea>
-      </div>
-      <div class="row">
+
+      <div class="row" style="margin-top:4px">
         <button class="btn btn-primary" id="add-vertex-btn">Add Vertex AI Credential</button>
         <span id="vertex-meta" style="color:var(--text3);font-size:13px"></span>
       </div>
@@ -691,34 +744,34 @@ a{color:var(--accent);text-decoration:none}
 <div id="tier-modal" class="modal-overlay" style="display:none">
   <div class="modal-box">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <div class="card-title" id="t-tier-modal-title" style="margin-bottom:0">更改服务层级</div>
+      <div class="card-title" id="t-tier-modal-title" style="margin-bottom:0">Change Service Tier</div>
       <button class="btn btn-outline btn-sm" id="tier-modal-close" style="padding:2px 7px;font-size:14px;border:none;cursor:pointer">✕</button>
     </div>
-    <div style="font-size:13px;color:var(--text3);margin-bottom:12px" id="t-tier-modal-desc">点击以下任一层级即可直接切换：</div>
+    <div style="font-size:13px;color:var(--text3);margin-bottom:12px" id="t-tier-modal-desc">Click an option below to switch directly:</div>
     <div style="font-size:12px;color:var(--text2);margin-bottom:14px;padding:8px 12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">
-      <span style="color:var(--text3)" id="t-tier-modal-cred-label">凭据：</span><strong id="tier-modal-cred-name" style="color:var(--text)"></strong>
+      <span style="color:var(--text3)" id="t-tier-modal-cred-label">Credential: </span><strong id="tier-modal-cred-name" style="color:var(--text)"></strong>
     </div>
     <div class="tier-choices" id="tier-choices">
       <button type="button" class="tier-choice-btn" data-tier="flex" id="tier-btn-flex">
         <div class="tier-choice-header">
           <span class="tier-choice-title">Flex</span>
-          <span class="tier-choice-badge" id="tier-badge-flex" style="display:none">当前</span>
+          <span class="tier-choice-badge" id="tier-badge-flex" style="display:none">Active</span>
         </div>
-        <div class="tier-choice-desc" id="t-tier-desc-flex">成本优先 — 50% 折扣，闲时算力/高延迟</div>
+        <div class="tier-choice-desc" id="t-tier-desc-flex">Cost-optimized — 50% discount, sheddable</div>
       </button>
       <button type="button" class="tier-choice-btn" data-tier="standard" id="tier-btn-standard">
         <div class="tier-choice-header">
           <span class="tier-choice-title">Standard</span>
-          <span class="tier-choice-badge" id="tier-badge-standard" style="display:none">当前</span>
+          <span class="tier-choice-badge" id="tier-badge-standard" style="display:none">Active</span>
         </div>
-        <div class="tier-choice-desc" id="t-tier-desc-standard">默认 — 基准价格与常规响应</div>
+        <div class="tier-choice-desc" id="t-tier-desc-standard">Default — standard price &amp; latency</div>
       </button>
       <button type="button" class="tier-choice-btn" data-tier="priority" id="tier-btn-priority">
         <div class="tier-choice-header">
           <span class="tier-choice-title">Priority</span>
-          <span class="tier-choice-badge" id="tier-badge-priority" style="display:none">当前</span>
+          <span class="tier-choice-badge" id="tier-badge-priority" style="display:none">Active</span>
         </div>
-        <div class="tier-choice-desc" id="t-tier-desc-priority">优先加速 — 最低延时保障，75-100% 溢价</div>
+        <div class="tier-choice-desc" id="t-tier-desc-priority">Latency-optimized — non-sheddable premium</div>
       </button>
     </div>
   </div>
@@ -941,26 +994,46 @@ const I = {
     logsStreamOn: 'Live',
     logsStreamOff: 'Disconnected',
     logsCounter: 'showing',
+    logsGapNotice: 'Logs {count} entries dropped (buffer overflow)',
     tabGoogleOAuth: 'Google OAuth',
     tabVertexAI: 'Vertex AI',
     addVertexTitle: 'Add Vertex AI Credential',
-    addVertexDesc: 'Add a Google Cloud Vertex AI credential using a Service Account or API key.',
+    addVertexDesc: 'Add a Google Cloud Vertex AI credential using a Service Account, API key, or system ADC.',
+    vertexReqSection: 'Required Configuration',
+    badgeRequired: 'Required',
     vertexCredLabel: 'Credential Label',
     vertexCredLabelPh: 'e.g. GCP Production',
     vertexProject: 'GCP Project ID',
     vertexProjectPh: 'e.g. my-project-12345',
     vertexLocation: 'Location / Region',
     vertexLocationPh: 'e.g. us-central1',
-    vertexSaKey: 'Service Account JSON (Optional)',
-    vertexSaKeyPh: 'Paste service account key.json contents here (or leave empty for system ADC)...',
-    vertexApiKey: 'Vertex API Key (Optional)',
-    vertexApiKeyPh: 'Leave empty if using Service Account or ADC',
-    vertexBaseUrl: 'Custom Base URL (Optional)',
-    vertexBaseUrlPh: 'e.g. https://us-central1-aiplatform.googleapis.com',
     vertexServiceTier: 'Service Tier (Latency & Cost)',
-    tierStandard: 'Standard (Default — standard price & latency)',
     tierFlex: 'Flex (Cost-optimized — 50% discount, sheddable)',
+    tierStandard: 'Standard (Default — standard price & latency)',
     tierPriority: 'Priority (Latency-optimized — non-sheddable premium)',
+    vertexAuthSection: 'Authentication Mode',
+    vertexAuthModeBadge: 'Choose 1 of 3',
+    vertexAuthDesc: 'Choose <strong>one</strong> of the three authentication modes below. Fill either Service Account JSON or API Key. If both are left empty, system Application Default Credentials (ADC) will be used automatically. Do not mix both.',
+    vertexAuthTabSa: 'Service Account JSON (Recommended)',
+    vertexAuthTabKey: 'Vertex API Key',
+    vertexAuthTabAdc: 'System ADC (Leave Empty)',
+    vertexSaHint: 'Paste the complete service-account.json downloaded from Google Cloud IAM:',
+    vertexSaKeyPh: 'Paste service account key.json contents here...',
+    vertexApiKeyHint: 'Enter the Vertex AI API Key created in Google Cloud Console Credentials page:',
+    vertexApiKeyPh: 'Enter Vertex API Key (e.g. AIzaSy...)',
+    vertexAdcTitle: '✔ System ADC mode selected (no key file required)',
+    vertexAdcDesc: 'No key is required. The server will automatically use the Google Cloud Application Default Credentials (ADC) configured in the local environment (e.g. gcloud auth application-default login or GCE/Cloud Run instance service account).',
+    vertexNetworkSection: 'Advanced Network Configuration',
+    vertexOptionalBadge: 'Optional',
+    vertexBaseUrlDesc: 'Only fill this when routing requests through a private gateway or custom reverse proxy. <strong>Leave empty when connecting directly to official Google endpoints.</strong>',
+    vertexBaseUrl: 'Custom Base URL',
+    vertexBaseUrlPh: 'e.g. https://us-central1-aiplatform.googleapis.com (leave empty for direct connection)',
+    labelRequired: 'Credential Label is required.',
+    projectRequired: 'GCP Project ID is required.',
+    locationRequired: 'Location / Region is required.',
+    saJsonRequired: 'Please paste the Service Account JSON contents (or switch to System ADC mode).',
+    saJsonInvalid: 'Service Account JSON is not valid JSON.',
+    apiKeyRequired: 'Please enter the Vertex API Key (or switch to System ADC mode).',
     addVertexBtn: 'Add Vertex AI Credential',
     vertexAdded: 'Vertex AI credential added successfully.',
     estimatedCost: 'Estimated Cost',
@@ -1177,26 +1250,46 @@ const I = {
     logsStreamOn: '实时',
     logsStreamOff: '未连接',
     logsCounter: '条',
+    logsGapNotice: '日志 {count} 条丢失（缓冲已溢出）',
     tabGoogleOAuth: 'Google OAuth',
     tabVertexAI: 'Vertex AI',
     addVertexTitle: '添加 Vertex AI 凭据',
-    addVertexDesc: '通过 Service Account 密钥或 API Key 添加 Google Cloud Vertex AI 凭据。',
+    addVertexDesc: '通过 Service Account 密钥、API Key 或系统默认 ADC 添加 Google Cloud Vertex AI 凭据。',
+    vertexReqSection: '基础配置（必填）',
+    badgeRequired: '必填',
     vertexCredLabel: '凭据名称',
     vertexCredLabelPh: '例如：GCP 生产环境',
     vertexProject: 'GCP 项目 ID',
     vertexProjectPh: '例如：my-project-12345',
     vertexLocation: '所在区域 (Location / Region)',
     vertexLocationPh: '例如：us-central1',
-    vertexSaKey: 'Service Account 密钥 JSON (可选)',
-    vertexSaKeyPh: '在此粘贴服务账号 key.json 完整内容 (若使用系统默认 ADC 可留空)...',
-    vertexApiKey: 'Vertex API Key (可选)',
-    vertexApiKeyPh: '若使用服务账号或本地 ADC 凭据请留空',
-    vertexBaseUrl: '自定义 Base URL (可选)',
-    vertexBaseUrlPh: '例如：https://us-central1-aiplatform.googleapis.com',
-    vertexServiceTier: '服务层级 (时延与成本模式)',
-    tierStandard: 'Standard (默认 — 基准价格与常规响应)',
+    vertexServiceTier: '服务层级 (Service Tier)',
     tierFlex: 'Flex (成本优先 — 50% 折扣，闲时算力/高延迟)',
+    tierStandard: 'Standard (默认 — 基准价格与常规响应)',
     tierPriority: 'Priority (优先加速 — 最低延时保障，75-100% 溢价)',
+    vertexAuthSection: '认证方式',
+    vertexAuthModeBadge: '三选一模式',
+    vertexAuthDesc: '以下三种认证方式<strong>任选其一</strong>。【服务账号密钥】与【API Key】二选一填写；若两者皆留空，则自动使用宿主机/服务器的【系统默认凭据 (ADC)】。请勿同时混填。',
+    vertexAuthTabSa: '服务账号 JSON (推荐)',
+    vertexAuthTabKey: 'Vertex API Key',
+    vertexAuthTabAdc: '系统默认凭据 (ADC)',
+    vertexSaHint: '在下方粘贴从 Google Cloud IAM 凭据中心下载的 Service Account 完整 JSON 密钥内容：',
+    vertexSaKeyPh: '在此粘贴服务账号 key.json 完整内容...',
+    vertexApiKeyHint: '输入在 Google Cloud 控制台凭据页面申请的 Vertex AI 专属 API Key：',
+    vertexApiKeyPh: '输入 Vertex API Key（例如：AIzaSy...）',
+    vertexAdcTitle: '✔ 已选择系统环境 ADC 模式（两项密钥均留空）',
+    vertexAdcDesc: '无需填写任何密钥。后台将自动使用服务器本地已登录的 Google Cloud ADC 凭据（如 gcloud auth application-default login 生成的本地凭据，或 GCE / Cloud Run 绑定的实例服务账号）。',
+    vertexNetworkSection: '高级网络配置',
+    vertexOptionalBadge: '可填可不填',
+    vertexBaseUrlDesc: '仅在通过私有网关或自定义反向代理访问 Vertex AI 时填写。<strong>常规直连 Google 官方端点请务必保持留空。</strong>',
+    vertexBaseUrl: '自定义 Base URL',
+    vertexBaseUrlPh: '例如：https://us-central1-aiplatform.googleapis.com (直连留空即可)',
+    labelRequired: '请输入凭据名称。',
+    projectRequired: '请输入 GCP 项目 ID。',
+    locationRequired: '请输入所在区域 (Location)。',
+    saJsonRequired: '请粘贴服务账号 JSON 密钥内容（若使用系统 ADC 请切换到"系统默认凭据"选项）。',
+    saJsonInvalid: '服务账号 JSON 格式不正确，不是有效的 JSON。',
+    apiKeyRequired: '请输入 Vertex API Key（若使用系统 ADC 请切换到"系统默认凭据"选项）。',
     addVertexBtn: '添加 Vertex AI 凭据',
     vertexAdded: 'Vertex AI 凭据添加成功。',
     estimatedCost: '累计预估成本',
@@ -1260,6 +1353,10 @@ function applyLang() {
   if (vTitle) vTitle.textContent = t('addVertexTitle');
   const vDesc = $('t-add-vertex-desc');
   if (vDesc) vDesc.textContent = t('addVertexDesc');
+  const vReqSec = $('t-vertex-req-section');
+  if (vReqSec) vReqSec.textContent = t('vertexReqSection');
+  const vBadgeReq = $('t-badge-required');
+  if (vBadgeReq) vBadgeReq.textContent = t('badgeRequired');
   const vLabel = $('t-vertex-cred-label');
   if (vLabel) vLabel.textContent = t('vertexCredLabel');
   const vLabelInput = $('vertex-label');
@@ -1272,26 +1369,53 @@ function applyLang() {
   if (vLoc) vLoc.textContent = t('vertexLocation');
   const vLocInput = $('vertex-location');
   if (vLocInput) vLocInput.placeholder = t('vertexLocationPh');
-  const vKey = $('t-vertex-api-key');
-  if (vKey) vKey.textContent = t('vertexApiKey');
+  const vTier = $('t-vertex-service-tier');
+  if (vTier) vTier.textContent = t('vertexServiceTier');
+  const optFlex = $('opt-tier-flex');
+  if (optFlex) optFlex.textContent = t('tierFlex');
+  const optStd = $('opt-tier-standard');
+  if (optStd) optStd.textContent = t('tierStandard');
+  const optPri = $('opt-tier-priority');
+  if (optPri) optPri.textContent = t('tierPriority');
+
+  // Auth section
+  const vAuthSec = $('t-vertex-auth-section');
+  if (vAuthSec) vAuthSec.textContent = t('vertexAuthSection');
+  const vAuthBadge = $('t-vertex-auth-mode-badge');
+  if (vAuthBadge) vAuthBadge.textContent = t('vertexAuthModeBadge');
+  const vAuthDesc = $('t-vertex-auth-desc');
+  if (vAuthDesc) vAuthDesc.innerHTML = t('vertexAuthDesc');
+  const vTabSa = $('vertex-auth-tab-sa');
+  if (vTabSa) vTabSa.textContent = t('vertexAuthTabSa');
+  const vTabKey = $('vertex-auth-tab-key');
+  if (vTabKey) vTabKey.textContent = t('vertexAuthTabKey');
+  const vTabAdc = $('vertex-auth-tab-adc');
+  if (vTabAdc) vTabAdc.textContent = t('vertexAuthTabAdc');
+  const vSaHint = $('t-vertex-sa-hint');
+  if (vSaHint) vSaHint.textContent = t('vertexSaHint');
+  const vSaInput = $('vertex-sa-json');
+  if (vSaInput) vSaInput.placeholder = t('vertexSaKeyPh');
+  const vKeyHint = $('t-vertex-api-key-hint');
+  if (vKeyHint) vKeyHint.textContent = t('vertexApiKeyHint');
   const vKeyInput = $('vertex-api-key');
   if (vKeyInput) vKeyInput.placeholder = t('vertexApiKeyPh');
+  const vAdcTitle = $('t-vertex-adc-title');
+  if (vAdcTitle) vAdcTitle.textContent = t('vertexAdcTitle');
+  const vAdcDesc = $('t-vertex-adc-desc');
+  if (vAdcDesc) vAdcDesc.innerHTML = t('vertexAdcDesc');
+
+  // Network section
+  const vNetSec = $('t-vertex-network-section');
+  if (vNetSec) vNetSec.textContent = t('vertexNetworkSection');
+  const vOptBadge = $('t-vertex-optional-badge');
+  if (vOptBadge) vOptBadge.textContent = t('vertexOptionalBadge');
+  const vBaseDesc = $('t-vertex-base-url-desc');
+  if (vBaseDesc) vBaseDesc.innerHTML = t('vertexBaseUrlDesc');
   const vBase = $('t-vertex-base-url');
   if (vBase) vBase.textContent = t('vertexBaseUrl');
   const vBaseInput = $('vertex-base-url');
   if (vBaseInput) vBaseInput.placeholder = t('vertexBaseUrlPh');
-  const vTier = $('t-vertex-service-tier');
-  if (vTier) vTier.textContent = t('vertexServiceTier');
-  const optStd = $('opt-tier-standard');
-  if (optStd) optStd.textContent = t('tierStandard');
-  const optFlex = $('opt-tier-flex');
-  if (optFlex) optFlex.textContent = t('tierFlex');
-  const optPri = $('opt-tier-priority');
-  if (optPri) optPri.textContent = t('tierPriority');
-  const vSa = $('t-vertex-sa-json');
-  if (vSa) vSa.textContent = t('vertexSaKey');
-  const vSaInput = $('vertex-sa-json');
-  if (vSaInput) vSaInput.placeholder = t('vertexSaKeyPh');
+
   const vBtn = $('add-vertex-btn');
   if (vBtn) vBtn.textContent = t('addVertexBtn');
   // Credentials
@@ -1572,7 +1696,7 @@ function setNotice(msg, type) {
   el.textContent = msg;
   if (type === 'ok') el.classList.add('notice-ok');
   el.classList.add('visible');
-  // 成功提示 5 秒后自动消失
+  // Auto-dismiss success notice after 5 seconds
   if (type === 'ok') setTimeout(() => { el.classList.remove('visible','notice-ok'); }, 5000);
 }
 
@@ -2125,6 +2249,37 @@ $('tab-btn-vertex').onclick = () => {
   $('cred-add-vertex').style.display = 'block';
 };
 
+let currentVertexAuthMode = 'sa';
+
+function setVertexAuthMode(mode) {
+  currentVertexAuthMode = mode;
+  const isSa = mode === 'sa';
+  const isKey = mode === 'key';
+  const isAdc = mode === 'adc';
+
+  const tabSa = $('vertex-auth-tab-sa');
+  const tabKey = $('vertex-auth-tab-key');
+  const tabAdc = $('vertex-auth-tab-adc');
+  if (tabSa) tabSa.className = isSa ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm';
+  if (tabKey) tabKey.className = isKey ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm';
+  if (tabAdc) tabAdc.className = isAdc ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm';
+
+  const panelSa = $('vertex-auth-panel-sa');
+  const panelKey = $('vertex-auth-panel-key');
+  const panelAdc = $('vertex-auth-panel-adc');
+  if (panelSa) panelSa.style.display = isSa ? '' : 'none';
+  if (panelKey) panelKey.style.display = isKey ? '' : 'none';
+  if (panelAdc) panelAdc.style.display = isAdc ? '' : 'none';
+}
+
+const tabSaEl = $('vertex-auth-tab-sa');
+if (tabSaEl) tabSaEl.onclick = () => setVertexAuthMode('sa');
+const tabKeyEl = $('vertex-auth-tab-key');
+if (tabKeyEl) tabKeyEl.onclick = () => setVertexAuthMode('key');
+const tabAdcEl = $('vertex-auth-tab-adc');
+if (tabAdcEl) tabAdcEl.onclick = () => setVertexAuthMode('adc');
+setVertexAuthMode('sa');
+
 $('add-vertex-btn').onclick = async () => {
   const btn = $('add-vertex-btn');
   const origText = btn.textContent;
@@ -2132,34 +2287,53 @@ $('add-vertex-btn').onclick = async () => {
   btn.innerHTML = '<span style="display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;margin-right:4px"></span>' + t('startingLogin');
   try {
     setNotice('');
-    const label = $('vertex-label').value.trim() || undefined;
+    const label = $('vertex-label').value.trim();
     const project = $('vertex-project').value.trim();
     const location = $('vertex-location').value.trim();
-    const apiKey = $('vertex-api-key').value.trim() || undefined;
-    const baseUrl = $('vertex-base-url').value.trim() || undefined;
-    const saRaw = $('vertex-sa-json').value.trim();
     const serviceTier = $('vertex-service-tier').value || 'standard';
+    const baseUrl = $('vertex-base-url').value.trim() || undefined;
 
-    if (!apiKey && (!project || !location)) {
-      throw new Error('Either GCP Project ID and Location OR Vertex API Key are required.');
+    if (!label) {
+      throw new Error(t('labelRequired'));
+    }
+    if (!project) {
+      throw new Error(t('projectRequired'));
+    }
+    if (!location) {
+      throw new Error(t('locationRequired'));
     }
 
-    let serviceAccountJson;
-    if (saRaw) {
+    let apiKey = undefined;
+    let serviceAccountJson = undefined;
+
+    if (currentVertexAuthMode === 'sa') {
+      const saRaw = $('vertex-sa-json').value.trim();
+      if (!saRaw) {
+        throw new Error(t('saJsonRequired'));
+      }
       try {
         JSON.parse(saRaw);
         serviceAccountJson = saRaw;
       } catch {
-        throw new Error('Service Account JSON is not valid JSON.');
+        throw new Error(t('saJsonInvalid'));
       }
+    } else if (currentVertexAuthMode === 'key') {
+      const keyRaw = $('vertex-api-key').value.trim();
+      if (!keyRaw) {
+        throw new Error(t('apiKeyRequired'));
+      }
+      apiKey = keyRaw;
+    } else if (currentVertexAuthMode === 'adc') {
+      apiKey = undefined;
+      serviceAccountJson = undefined;
     }
 
     await api('/v1/credentials/vertex', {
       method: 'POST',
       body: JSON.stringify({
         label,
-        project: project || undefined,
-        location: location || undefined,
+        project,
+        location,
         apiKey,
         baseUrl,
         serviceAccountJson,
@@ -2175,6 +2349,7 @@ $('add-vertex-btn').onclick = async () => {
     $('vertex-base-url').value = '';
     $('vertex-sa-json').value = '';
     $('vertex-service-tier').value = 'standard';
+    setVertexAuthMode('sa');
     setTimeout(() => { $('vertex-meta').textContent = ''; }, 4000);
     await refreshAll();
   } catch(e) {
@@ -3329,11 +3504,8 @@ async function startLogsStream() {
     es.addEventListener('gap', (ev) => {
       try {
         const info = JSON.parse(ev.data);
-        setNotice(
-          (S.lang === 'zh' ? '日志 ' : 'Logs ') +
-          (info && info.lost ? info.lost : '?') +
-          (S.lang === 'zh' ? ' 条丢失（缓冲已溢出）' : ' entries dropped (buffer overflow)'),
-        );
+        const count = info && info.lost ? info.lost : '?';
+        setNotice(t('logsGapNotice').replace('{count}', count));
       } catch { /* ignore malformed */ }
     });
     es.onerror = () => {

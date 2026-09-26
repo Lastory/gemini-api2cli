@@ -16,17 +16,26 @@ The following `gemini-api2cli`-specific files added in this fork are made
 available under the Cooperative Non-Commercial License (`CNC-1.0`), whose text
 is provided in [LICENSE-CNC-1.0.txt](./LICENSE-CNC-1.0.txt):
 
+- `.env.example`
 - `README.md`
 - `README.zh-CN.md`
-- `packages/a2a-server/README.md`
-- `packages/a2a-server/src/http/promptApi.ts`
-- `packages/a2a-server/src/http/promptApi.test.ts`
-- `packages/a2a-server/src/http/promptApiAuth.ts`
-- `packages/a2a-server/src/http/promptApiConsole.ts`
-- `packages/a2a-server/src/http/promptCredentialStore.ts`
-- `packages/a2a-server/src/http/adapters/types.ts`
-- `packages/a2a-server/src/http/adapters/geminiAdapter.ts`
-- `packages/a2a-server/src/http/adapters/openaiAdapter.ts`
+- `packages\a2a-server\README.md`
+- `packages\a2a-server\src\http\acpProcessPool.ts`
+- `packages\a2a-server\src\http\inputComparisonStore.test.ts`
+- `packages\a2a-server\src\http\inputComparisonStore.ts`
+- `packages\a2a-server\src\http\promptApi.test.ts`
+- `packages\a2a-server\src\http\promptApi.ts`
+- `packages\a2a-server\src\http\promptApiAuth.ts`
+- `packages\a2a-server\src\http\promptApiConsole.ts`
+- `packages\a2a-server\src\http\promptCredentialStore.ts`
+- `packages\a2a-server\src\http\adapters\adaptersUsage.test.ts`
+- `packages\a2a-server\src\http\adapters\geminiAdapter.ts`
+- `packages\a2a-server\src\http\adapters\generationConfig.test.ts`
+- `packages\a2a-server\src\http\adapters\openaiAdapter.ts`
+- `packages\a2a-server\src\http\adapters\types.ts`
+- `packages\a2a-server\src\http\vertexCredential.test.ts`
+- `packages\a2a-server\src\http\vertexPricing.test.ts`
+- `packages\a2a-server\src\http\vertexPricing.ts`
 
 ## Important Note
 
