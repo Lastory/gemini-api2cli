@@ -744,6 +744,9 @@ describe('Prompt API routes', () => {
     expect(consoleResponse.headers['content-type']).toContain('text/html');
     expect(consoleResponse.text).toContain('Gemini');
     expect(consoleResponse.text).toContain('/v1/openai/v1/chat/completions');
+    expect(consoleResponse.text).toContain(
+      "api('/v1/acp/workers/' + encodeURIComponent(credentialId)",
+    );
 
     const deleteOneResponse = await request(app).delete(
       PROMPT_API_CREDENTIAL_ROUTE.replace(':credentialId', credential.id),
@@ -766,6 +769,44 @@ describe('Prompt API routes', () => {
     expect(deleteAllResponse.status).toBe(200);
     expect(deleteAllResponse.body.currentCredentialId).toBeNull();
     expect(deleteAllResponse.body.credentials).toHaveLength(0);
+  });
+
+  it('deletes an individual ACP worker via DELETE /v1/acp/workers/:credentialId and all workers via DELETE /v1/acp/workers', async () => {
+    const workspaceRoot = mkdtempSync(
+      path.join(tmpdir(), 'gemini-prompt-api-workspace-'),
+    );
+    tempDirs.push(workspaceRoot);
+    const credentialStoreRoot = mkdtempSync(
+      path.join(tmpdir(), 'gemini-prompt-api-credentials-'),
+    );
+    tempDirs.push(credentialStoreRoot);
+    const fakeCliEntry = path.join(workspaceRoot, 'fake-cli.js');
+    writeFileSync(fakeCliEntry, '// fake cli entry\n');
+
+    const mockAcpPool = {
+      destroy: vi.fn().mockResolvedValue(undefined),
+      destroyAll: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpProcessPool;
+
+    const app = createTestApp({
+      workspaceRoot,
+      cliEntryPath: fakeCliEntry,
+      credentialStoreRoot,
+      timeoutMs: 5000,
+      acpPool: mockAcpPool,
+    });
+
+    const singleRes = await request(app).delete(
+      '/v1/acp/workers/worker-cred-123',
+    );
+    expect(singleRes.status).toBe(200);
+    expect(singleRes.body).toEqual({ ok: true });
+    expect(mockAcpPool.destroy).toHaveBeenCalledWith('worker-cred-123');
+
+    const allRes = await request(app).delete('/v1/acp/workers');
+    expect(allRes.status).toBe(200);
+    expect(allRes.body).toEqual({ ok: true });
+    expect(mockAcpPool.destroyAll).toHaveBeenCalled();
   });
 
   it.skip('streams SSE output via OpenAI-compatible route and reports errors (legacy one-shot CLI mode)', async () => {

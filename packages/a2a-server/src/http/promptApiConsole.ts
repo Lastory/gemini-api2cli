@@ -3270,13 +3270,10 @@ function stopAcpAutoRefresh() {
 
 window.killAcpWorker = async function(credentialId) {
   try {
-    // The DELETE /v1/acp/workers endpoint kills all workers; this
-    // matches the server-side handler today (no per-credential
-    // route exists). We surface the per-row Kill button anyway so
-    // the user can act on the worker they're inspecting.
-    await api('/v1/acp/workers',{method:'DELETE'});
+    await api('/v1/acp/workers/' + encodeURIComponent(credentialId),{method:'DELETE'});
     AcpUI.expanded.delete(credentialId);
     AcpUI.detailCache.delete(credentialId);
+    AcpDetail.state.delete(credentialId);
     await loadAcpStatus();
   } catch(e) { showErr(e); }
 };
@@ -3287,6 +3284,7 @@ $('kill-all-acp-btn').onclick = async () => {
     await api('/v1/acp/workers',{method:'DELETE'});
     AcpUI.expanded.clear();
     AcpUI.detailCache.clear();
+    AcpDetail.state.clear();
     await loadAcpStatus();
   } catch(e) { showErr(e); }
 };

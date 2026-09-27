@@ -3670,9 +3670,30 @@ export function createPromptApiRouter(
     return res.status(200).json({ ok: true });
   });
 
+  router.delete('/v1/acp/workers/:credentialId', async (req, res) => {
+    try {
+      const { credentialId } = req.params as Record<string, string>;
+      if (!credentialId) {
+        return res.status(400).json({ error: 'Invalid credential ID' });
+      }
+      await state.acpPool.destroy(credentialId);
+      return res.status(200).json({ ok: true });
+    } catch (error) {
+      return res.status(500).json({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
   router.delete('/v1/acp/workers', async (_req, res) => {
-    await state.acpPool.destroyAll();
-    return res.status(200).json({ ok: true });
+    try {
+      await state.acpPool.destroyAll();
+      return res.status(200).json({ ok: true });
+    } catch (error) {
+      return res.status(500).json({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   });
 
   router.get(PROMPT_API_INPUT_COMPARISON_ROUTE, (_req, res) =>
