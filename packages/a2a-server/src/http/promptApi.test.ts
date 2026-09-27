@@ -771,6 +771,160 @@ describe('Prompt API routes', () => {
     expect(deleteAllResponse.body.credentials).toHaveLength(0);
   });
 
+  it('manages credential disabled state via PATCH /v1/credentials/:credentialId', async () => {
+    const workspaceRoot = mkdtempSync(
+      path.join(tmpdir(), 'gemini-prompt-api-workspace-'),
+    );
+    tempDirs.push(workspaceRoot);
+    const credentialStoreRoot = mkdtempSync(
+      path.join(tmpdir(), 'gemini-prompt-api-credentials-'),
+    );
+    tempDirs.push(credentialStoreRoot);
+
+    const credentialStore = new PromptCredentialStore(credentialStoreRoot);
+    await credentialStore.createCredential('Cred One', 'cred-1');
+    await credentialStore.createCredential('Cred Two', 'cred-2');
+    await credentialStore.setCurrentCredential('cred-1');
+
+    const app = createTestApp({
+      sourceGeminiCliHome: workspaceRoot,
+      credentialStoreRoot,
+    });
+
+    // Initial check: neither is disabled
+    const listRes1 = await request(app).get(PROMPT_API_CREDENTIALS_ROUTE);
+    expect(listRes1.status).toBe(200);
+    expect(listRes1.body.currentCredentialId).toBe('cred-1');
+    expect(listRes1.body.credentials[0].disabled).toBe(false);
+    expect(listRes1.body.credentials[1].disabled).toBe(false);
+
+    // Disable cred-2 via PATCH
+    const patchRes1 = await request(app)
+      .patch(PROMPT_API_CREDENTIAL_ROUTE.replace(':credentialId', 'cred-2'))
+      .send({ disabled: true });
+    expect(patchRes1.status).toBe(200);
+    expect(patchRes1.body.credential.id).toBe('cred-2');
+    expect(patchRes1.body.credential.disabled).toBe(true);
+
+    // Trying to select disabled cred-2 as current should be rejected with 400
+    const switchDisabledRes = await request(app)
+      .put(PROMPT_API_CURRENT_CREDENTIAL_ROUTE)
+      .send({ credentialId: 'cred-2' });
+    expect(switchDisabledRes.status).toBe(400);
+    expect(switchDisabledRes.body.error).toContain(
+      'Cannot set disabled credential',
+    );
+
+    // Disabling current credential cred-1 should automatically clear currentCredentialId
+    const patchRes2 = await request(app)
+      .patch(PROMPT_API_CREDENTIAL_ROUTE.replace(':credentialId', 'cred-1'))
+      .send({ disabled: true });
+    expect(patchRes2.status).toBe(200);
+    expect(patchRes2.body.credential.disabled).toBe(true);
+
+    const listRes2 = await request(app).get(PROMPT_API_CREDENTIALS_ROUTE);
+    expect(listRes2.body.currentCredentialId).toBeNull();
+
+    // Re-enable cred-2
+    const enableRes = await request(app)
+      .patch(PROMPT_API_CREDENTIAL_ROUTE.replace(':credentialId', 'cred-2'))
+      .send({ disabled: false });
+    expect(enableRes.status).toBe(200);
+    expect(enableRes.body.credential.disabled).toBe(false);
+
+    // Now cred-2 can be set as current
+    const switchRes = await request(app)
+      .put(PROMPT_API_CURRENT_CREDENTIAL_ROUTE)
+      .send({ credentialId: 'cred-2' });
+    expect(switchRes.status).toBe(200);
+    expect(switchRes.body.currentCredential.id).toBe('cred-2');
+
+    // Reject non-boolean disabled
+    const badReq = await request(app)
+      .patch(PROMPT_API_CREDENTIAL_ROUTE.replace(':credentialId', 'cred-2'))
+      .send({ disabled: 'not-a-bool' });
+    expect(badReq.status).toBe(400);
+
+    // Verify console text contains the updated button labels
+    const consoleResponse = await request(app).get(PROMPT_API_CONSOLE_ROUTE);
+    expect(consoleResponse.status).toBe(200);
+    expect(consoleResponse.text).toContain('选中');
+    expect(consoleResponse.text).toContain('可用测试');
+    expect(consoleResponse.text).toContain('额度');
+    expect(consoleResponse.text).toContain('禁用');
+    expect(consoleResponse.text).toContain('启用');
+  });
+
+  it('skips disabled credentials during credential rotation', async () => {
+    const workspaceRoot = mkdtempSync(
+      path.join(tmpdir(), 'gemini-prompt-api-workspace-'),
+    );
+    tempDirs.push(workspaceRoot);
+    const credentialStoreRoot = mkdtempSync(
+      path.join(tmpdir(), 'gemini-prompt-api-credentials-'),
+    );
+    tempDirs.push(credentialStoreRoot);
+    const fakeCliEntry = path.join(workspaceRoot, 'fake-cli.js');
+    writeFileSync(fakeCliEntry, 'console.log("ok");');
+
+    const credentialStore = new PromptCredentialStore(credentialStoreRoot);
+    await credentialStore.createCredential('Cred 1', 'rot-1');
+    await credentialStore.createCredential('Cred 2', 'rot-2');
+    await credentialStore.setCredentialDisabled('rot-1', true);
+
+    const mockWorker = {
+      credentialId: 'default',
+      createSession: vi.fn().mockResolvedValue('test-session-rotation'),
+      setSessionModel: vi.fn().mockResolvedValue(undefined),
+      prompt: vi.fn().mockImplementation((_sessionId, _blocks, onUpdate) => {
+        if (onUpdate) {
+          onUpdate({
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'rotation test reply' },
+            },
+          });
+        }
+        return Promise.resolve({ stopReason: 'end_turn' });
+      }),
+      cancelPrompt: vi.fn(),
+      destroySession: vi.fn(),
+    };
+
+    const mockPool = {
+      getOrCreate: vi.fn().mockResolvedValue(mockWorker),
+      getAnyIdleWorker: vi.fn().mockReturnValue(undefined),
+      destroy: vi.fn().mockResolvedValue(undefined),
+      destroyAll: vi.fn().mockResolvedValue(undefined),
+      warmUp: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpProcessPool;
+
+    const app = createTestApp({
+      cliEntryPath: fakeCliEntry,
+      spawnProcess: vi.fn(),
+      credentialStoreRoot,
+      timeoutMs: 5000,
+      acpPool: mockPool,
+    });
+
+    // Enable rotation
+    await request(app).put('/v1/settings').send({ rotationEnabled: true });
+
+    // Send a chat request
+    const chatRes = await request(app)
+      .post('/v1/chat/completions')
+      .send({
+        messages: [{ role: 'user', content: 'hello' }],
+      });
+    expect(chatRes.status).toBe(200);
+
+    // Verify mockPool.getOrCreate was called with rot-2, NOT rot-1 (which is disabled)
+    const calls = (mockPool.getOrCreate as ReturnType<typeof vi.fn>).mock.calls;
+    const usedCredIds = calls.map((c: unknown[]) => c[0]);
+    expect(usedCredIds).toContain('rot-2');
+    expect(usedCredIds).not.toContain('rot-1');
+  });
+
   it('deletes an individual ACP worker via DELETE /v1/acp/workers/:credentialId and all workers via DELETE /v1/acp/workers', async () => {
     const workspaceRoot = mkdtempSync(
       path.join(tmpdir(), 'gemini-prompt-api-workspace-'),

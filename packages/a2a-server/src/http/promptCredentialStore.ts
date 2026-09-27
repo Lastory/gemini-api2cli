@@ -38,6 +38,7 @@ export type PromptApiCredentialRecord = {
   baseUrl?: string;
   serviceTier?: 'standard' | 'flex' | 'priority';
   costEstimate?: VertexCostEstimate;
+  disabled?: boolean;
 };
 
 export interface CreateVertexCredentialParams {
@@ -103,9 +104,49 @@ export class PromptCredentialStore {
   }
 
   async setCurrentCredential(credentialId: string): Promise<void> {
+    const credential = await this.getCredential(credentialId);
+    if (credential?.disabled) {
+      throw new Error(
+        `Cannot set disabled credential "${credentialId}" as current.`,
+      );
+    }
     const state = await this.readState();
     state.currentCredentialId = credentialId;
     await this.writeState(state);
+  }
+
+  async setCredentialDisabled(
+    credentialId: string,
+    disabled: boolean,
+  ): Promise<PromptApiCredentialRecord> {
+    return this.withCredentialLock(credentialId, async () => {
+      const existing = await this.getCredential(credentialId);
+      if (!existing) {
+        throw new Error(`Credential not found: ${credentialId}`);
+      }
+
+      const now = new Date().toISOString();
+      const updated: PromptApiCredentialRecord = {
+        ...existing,
+        disabled,
+        updatedAt: now,
+      };
+
+      await writeFile(
+        this.getCredentialMetadataPath(credentialId),
+        JSON.stringify(updated, null, 2),
+        'utf8',
+      );
+
+      if (disabled) {
+        const currentCredentialId = await this.getCurrentCredentialId();
+        if (currentCredentialId === credentialId) {
+          await this.clearCurrentCredential();
+        }
+      }
+
+      return updated;
+    });
   }
 
   async clearCurrentCredential(): Promise<void> {
@@ -133,6 +174,7 @@ export class PromptCredentialStore {
       label: label?.trim() || `Credential ${id.slice(0, 8)}`,
       createdAt: now,
       updatedAt: now,
+      disabled: false,
     };
 
     await mkdir(this.getCredentialDir(id), { recursive: true });
@@ -160,6 +202,7 @@ export class PromptCredentialStore {
       label: params.label?.trim() || `Vertex AI (${params.project})`,
       createdAt: now,
       updatedAt: now,
+      disabled: false,
       project: params.project.trim(),
       location: params.location.trim(),
       hasServiceAccount,

@@ -115,6 +115,7 @@ a{color:var(--accent);text-decoration:none}
 .cred-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
 .cred-card{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;transition:border-color .15s}
 .cred-card.active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.cred-card.disabled{opacity:.65}
 .cred-header{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
 .cred-name{font-weight:700;font-size:15px;min-width:0;word-break:break-word}
 .cred-badges{display:flex;align-items:center;gap:4px;flex-shrink:0}
@@ -131,6 +132,7 @@ a{color:var(--accent);text-decoration:none}
 .badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600;white-space:nowrap}
 .badge-active{background:var(--green-bg);color:var(--green)}
 .badge-stored{background:rgba(155,163,184,.1);color:var(--text3)}
+.badge-disabled{background:var(--red-bg);color:var(--red)}
 
 /* ── Quota ── */
 .quota-card{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px}
@@ -831,15 +833,19 @@ const I = {
     defaultModelDesc: "Used when chat requests don't specify a model.",
     save: 'Save',
     quotaDetail: 'Quota Detail',
-    quotaDetailDesc: 'Click "View Quota" on a credential to see its raw quota data.',
+    quotaDetailDesc: 'Click "Quota" on a credential to see its raw quota data.',
     apiEndpoints: 'API Endpoints',
     apiEndpointsDesc: 'All endpoints require <code style="color:var(--accent)">Authorization: Bearer &lt;token&gt;</code> header.',
     noCreds: 'No credentials yet. Start a login flow to create one.',
     noQuota: 'No quota data. Add credentials first.',
     active: 'Active',
     stored: 'Stored',
-    setActive: 'Set Active',
-    viewQuota: 'View Quota',
+    setActive: 'Select',
+    viewQuota: 'Quota',
+    disable: 'Disable',
+    enable: 'Enable',
+    credDisabled: 'Disabled',
+    disabledCannotSelect: 'Disabled credentials cannot be set as active.',
     delete: 'Delete',
     notLoggedIn: 'Not logged in',
     loginStarted: 'Login started. Credential: ',
@@ -873,7 +879,7 @@ const I = {
     msgTesting: 'Sending message...',
     startingLogin: 'Starting...',
     completingLogin: 'Completing...',
-    testCredBtn: 'Available?',
+    testCredBtn: 'Auth Test',
     testCredTip: 'Auth check — verify OAuth token & projectId are valid (cheap, no quota cost).',
     msgTestBtn: 'Message Test',
     msgTestTip: 'Send a real "hi" message via gemini-2.5-flash to verify the credential can actually generate (catches per-model quota exhaustion).',
@@ -1087,15 +1093,19 @@ const I = {
     defaultModelDesc: '聊天请求未指定模型时使用此默认模型。',
     save: '保存',
     quotaDetail: '额度详情',
-    quotaDetailDesc: '点击凭据上的"查看额度"按钮可在此查看原始额度数据。',
+    quotaDetailDesc: '点击凭据上的"额度"按钮可在此查看原始额度数据。',
     apiEndpoints: 'API 接口文档',
     apiEndpointsDesc: '所有接口需要 <code style="color:var(--accent)">Authorization: Bearer &lt;token&gt;</code> 请求头。',
     noCreds: '暂无凭据。请先发起登录流程。',
     noQuota: '暂无额度数据。请先添加凭据。',
     active: '使用中',
     stored: '已存储',
-    setActive: '设为当前',
-    viewQuota: '查看额度',
+    setActive: '选中',
+    viewQuota: '额度',
+    disable: '禁用',
+    enable: '启用',
+    credDisabled: '已禁用',
+    disabledCannotSelect: '已禁用的凭据无法设为当前。',
     delete: '删除',
     notLoggedIn: '未登录',
     loginStarted: '登录已发起，凭据 ID：',
@@ -1129,7 +1139,7 @@ const I = {
     msgTesting: '发送消息中...',
     startingLogin: '发起中...',
     completingLogin: '完成中...',
-    testCredBtn: '凭证可用',
+    testCredBtn: '可用测试',
     testCredTip: '认证检查 — 验证 OAuth Token 和 projectId 是否有效（轻量级，不消耗配额）。',
     msgTestBtn: '消息测试',
     msgTestTip: '通过 gemini-2.5-flash 发送一条真实的 "hi" 消息，验证凭证能否真正生成内容（可发现单模型配额耗尽问题）。',
@@ -1776,9 +1786,11 @@ function renderCreds(payload) {
     const typeBadge = isVertex
       ? '<span class="badge" style="background:#0284c7;color:#fff">Vertex</span>'
       : '<span class="badge" style="background:var(--bg3);color:var(--text2)">OAuth</span>';
-    const badge = c.isCurrent
-      ? '<span class="badge badge-active">'+esc(t('active'))+'</span>'
-      : '<span class="badge badge-stored">'+esc(t('stored'))+'</span>';
+    const badge = c.disabled
+      ? '<span class="badge badge-disabled">'+esc(t('credDisabled'))+'</span>'
+      : (c.isCurrent
+        ? '<span class="badge badge-active">'+esc(t('active'))+'</span>'
+        : '<span class="badge badge-stored">'+esc(t('stored'))+'</span>');
 
     let subtitle = '';
     if (isVertex) {
@@ -1793,7 +1805,14 @@ function renderCreds(payload) {
       subtitle = c.email ? esc(c.email) : esc(t('notLoggedIn'));
     }
 
-    return '<div class="cred-card'+(c.isCurrent?' active':'')+'">'+
+    const selectBtn = c.disabled
+      ? '<button class="btn btn-ghost btn-sm" disabled title="'+esc(t('disabledCannotSelect'))+'">'+esc(t('setActive'))+'</button>'
+      : '<button class="btn btn-ghost btn-sm" data-a="switch" data-id="'+esc(c.id)+'">'+esc(t('setActive'))+'</button>';
+    const disableBtn = c.disabled
+      ? '<button class="btn btn-outline btn-sm" data-a="enable" data-id="'+esc(c.id)+'">'+esc(t('enable'))+'</button>'
+      : '<button class="btn btn-outline btn-sm" data-a="disable" data-id="'+esc(c.id)+'">'+esc(t('disable'))+'</button>';
+
+    return '<div class="cred-card'+(c.isCurrent?' active':'')+(c.disabled?' disabled':'')+'">'+
       '<div class="cred-header">'+
         '<div class="cred-name">'+esc(c.label)+'</div>'+
         '<div class="cred-badges">'+typeBadge+badge+'</div>'+
@@ -1802,7 +1821,8 @@ function renderCreds(payload) {
       '<div class="cred-id">'+esc(c.id)+'</div>'+
       renderCredCooldowns(c.cooldowns)+
       '<div class="cred-actions">'+
-        '<button class="btn btn-ghost btn-sm" data-a="switch" data-id="'+esc(c.id)+'">'+esc(t('setActive'))+'</button>'+
+        selectBtn+
+        disableBtn+
         '<button class="btn btn-outline btn-sm" data-a="test" data-id="'+esc(c.id)+'" title="'+esc(t('testCredTip'))+'">'+esc(t('testCredBtn'))+'</button>'+
         '<button class="btn btn-outline btn-sm" data-a="test-message" data-id="'+esc(c.id)+'" title="'+esc(t('msgTestTip'))+'">'+esc(t('msgTestBtn'))+'</button>'+
         '<button class="btn btn-outline btn-sm" data-a="quota" data-id="'+esc(c.id)+'">'+esc(t('viewQuota'))+'</button>'+
@@ -2401,6 +2421,12 @@ $('cred-list').onclick = e => {
 
   if (action === 'switch') {
     api('/v1/credentials/current',{method:'PUT',body:JSON.stringify({credentialId:id})})
+      .then(()=>refreshAll()).catch(showErr);
+  } else if (action === 'disable') {
+    api('/v1/credentials/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({disabled:true})})
+      .then(()=>refreshAll()).catch(showErr);
+  } else if (action === 'enable') {
+    api('/v1/credentials/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({disabled:false})})
       .then(()=>refreshAll()).catch(showErr);
   } else if (action === 'quota') {
     $('quota-detail-meta').textContent = t('loadingQuota') + id + '...';

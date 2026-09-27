@@ -576,6 +576,7 @@ function getPromptApiCredentialPayload(
     id: credential.id,
     type: credential.type ?? 'oauth',
     label: credential.label,
+    disabled: Boolean(credential.disabled),
     ...(credential.email ? { email: credential.email } : {}),
     createdAt: credential.createdAt,
     updatedAt: credential.updatedAt,
@@ -982,9 +983,10 @@ async function getEffectiveSourceGeminiCliHome(
   deps: Required<PromptApiDependencies>,
   state: PromptApiState,
 ): Promise<string> {
-  // Rotation mode: cycle through all credentials
+  // Rotation mode: cycle through all enabled credentials
   if (state.settings.rotationEnabled) {
-    const credentials = await state.credentialStore.listCredentials();
+    const allCredentials = await state.credentialStore.listCredentials();
+    const credentials = allCredentials.filter((c) => !c.disabled);
     if (credentials.length > 0) {
       const idx = state.rotationIndex % credentials.length;
       state.rotationIndex = idx + 1;
@@ -1004,7 +1006,7 @@ async function getEffectiveSourceGeminiCliHome(
 
   const credential =
     await state.credentialStore.getCredential(currentCredentialId);
-  if (!credential) {
+  if (!credential || credential.disabled) {
     return deps.sourceGeminiCliHome;
   }
 
@@ -1402,16 +1404,22 @@ async function getEffectiveCredentialIdAndHome(
       idleWorker &&
       !hasCredentialWideCooldown(state, idleWorker.credentialId)
     ) {
-      logger.info(
-        `[Prompt API] Rotation: Semi-strict reuse of idle worker for credential "${idleWorker.credentialId}"`,
-      );
-      const homeDir = state.credentialStore.getCredentialHomeDir(
+      const idleCred = await state.credentialStore.getCredential(
         idleWorker.credentialId,
       );
-      return { credentialId: idleWorker.credentialId, homeDir };
+      if (idleCred && !idleCred.disabled) {
+        logger.info(
+          `[Prompt API] Rotation: Semi-strict reuse of idle worker for credential "${idleWorker.credentialId}"`,
+        );
+        const homeDir = state.credentialStore.getCredentialHomeDir(
+          idleWorker.credentialId,
+        );
+        return { credentialId: idleWorker.credentialId, homeDir };
+      }
     }
 
-    const credentials = await state.credentialStore.listCredentials();
+    const allCredentials = await state.credentialStore.listCredentials();
+    const credentials = allCredentials.filter((c) => !c.disabled);
     if (credentials.length > 0) {
       // Try up to credentials.length times to find a healthy one
       for (let i = 0; i < credentials.length; i++) {
@@ -1452,7 +1460,7 @@ async function getEffectiveCredentialIdAndHome(
 
   const credential =
     await state.credentialStore.getCredential(currentCredentialId);
-  if (!credential) {
+  if (!credential || credential.disabled) {
     return { credentialId: 'default', homeDir: deps.sourceGeminiCliHome };
   }
 
@@ -1881,7 +1889,8 @@ async function getAcpWorkerAndSessionExcluding(
   credentialId: string;
 } | null> {
   pruneCredentialCooldowns(state);
-  const credentials = await state.credentialStore.listCredentials();
+  const allCredentials = await state.credentialStore.listCredentials();
+  const credentials = allCredentials.filter((c) => !c.disabled);
   for (const cred of credentials) {
     if (excludeCredentialIds.has(cred.id)) continue;
     if (hasCredentialWideCooldown(state, cred.id)) continue;
@@ -2056,7 +2065,8 @@ async function speculativeWorkerAndSession(
 ): Promise<PrefetchedSession | null> {
   void deps;
   pruneCredentialCooldowns(state);
-  const credentials = await state.credentialStore.listCredentials();
+  const allCredentials = await state.credentialStore.listCredentials();
+  const credentials = allCredentials.filter((c) => !c.disabled);
   for (const cred of credentials) {
     if (excludeCredentialIds.has(cred.id)) continue;
     if (hasCredentialWideCooldown(state, cred.id)) continue;
@@ -2747,7 +2757,8 @@ export function createPromptApiRouter(
   // Pre-warm primary + failover workers in the background
   void (async () => {
     try {
-      const credentials = await state.credentialStore.listCredentials();
+      const allCredentials = await state.credentialStore.listCredentials();
+      const credentials = allCredentials.filter((c) => !c.disabled);
       if (credentials.length === 0) {
         logger.info('[ACP] No credentials found, skipping startup warm-up');
         return;
@@ -3853,6 +3864,11 @@ export function createPromptApiRouter(
           error: `Credential not found: ${credentialId}`,
         });
       }
+      if (credential.disabled) {
+        return res.status(400).json({
+          error: `Cannot set disabled credential "${credential.label || credentialId}" as current.`,
+        });
+      }
 
       await state.credentialStore.setCurrentCredential(credential.id);
       return res.status(200).json({
@@ -4070,11 +4086,102 @@ export function createPromptApiRouter(
     }
   };
 
+  const updateCredentialHandler = async (req: Request, res: Response) => {
+    try {
+      const { credentialId } = req.params;
+      if (!credentialId) {
+        throw new BadRequestError('Credential ID is required.');
+      }
+      if (!isObject(req.body)) {
+        throw new BadRequestError('Request body must be a JSON object.');
+      }
+
+      const existing = await state.credentialStore.getCredential(credentialId);
+      if (!existing) {
+        return res.status(404).json({
+          error: `Credential not found: ${credentialId}`,
+        });
+      }
+
+      let updated = existing;
+
+      if ('disabled' in req.body) {
+        const rawDisabled = req.body['disabled'];
+        if (typeof rawDisabled !== 'boolean') {
+          throw new BadRequestError('"disabled" must be a boolean.');
+        }
+        updated = await state.credentialStore.setCredentialDisabled(
+          credentialId,
+          rawDisabled,
+        );
+        if (rawDisabled && state.acpPool) {
+          await state.acpPool.destroy(credentialId);
+        }
+      }
+
+      if ('serviceTier' in req.body) {
+        if (updated.type !== 'vertex-ai') {
+          return res.status(400).json({
+            error: `Credential "${credentialId}" is not a Vertex AI credential.`,
+          });
+        }
+        const rawServiceTier = req.body['serviceTier'];
+        if (typeof rawServiceTier !== 'string') {
+          throw new BadRequestError(
+            '"serviceTier" must be a string ("standard", "flex", or "priority").',
+          );
+        }
+        const normalizedTier = rawServiceTier.trim().toLowerCase();
+        if (
+          normalizedTier !== 'standard' &&
+          normalizedTier !== 'flex' &&
+          normalizedTier !== 'priority'
+        ) {
+          throw new BadRequestError(
+            'Invalid "serviceTier". Allowed values are "standard", "flex", or "priority".',
+          );
+        }
+        updated = await state.credentialStore.updateVertexServiceTier(
+          credentialId,
+          normalizedTier,
+        );
+        if (state.acpPool) {
+          await state.acpPool.destroy(credentialId);
+        }
+      }
+
+      if (!('disabled' in req.body) && !('serviceTier' in req.body)) {
+        throw new BadRequestError(
+          'At least one field ("disabled" or "serviceTier") must be provided.',
+        );
+      }
+
+      const currentCredentialId =
+        await state.credentialStore.getCurrentCredentialId();
+      return res.status(200).json({
+        credential: getPromptApiCredentialPayload(updated, currentCredentialId),
+        sessionPolicy: 'per-request',
+      });
+    } catch (error) {
+      if (error instanceof BadRequestError) {
+        return res.status(400).json({ error: error.message });
+      }
+      if (error instanceof Error && error.message.includes('not found')) {
+        return res.status(404).json({ error: error.message });
+      }
+      logPromptApiError(error);
+      return res.status(500).json({
+        error:
+          error instanceof Error ? error.message : 'Unknown prompt API error',
+      });
+    }
+  };
+
   router.put(
     PROMPT_API_CREDENTIAL_SERVICE_TIER_ROUTE,
     updateServiceTierHandler,
   );
-  router.patch(PROMPT_API_CREDENTIAL_ROUTE, updateServiceTierHandler);
+  router.patch(PROMPT_API_CREDENTIAL_ROUTE, updateCredentialHandler);
 
   router.post(PROMPT_API_CREDENTIAL_LOGIN_ROUTE, async (req, res) => {
     try {
