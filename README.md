@@ -28,26 +28,43 @@ CLI 作为底层执行引擎，在此之上增加了浏览器管理台、Token �
 - Node.js >= 20
 - npm >= 10
 
-### 本地启动
+### 本地部署
+
+#### 1. 首次安装
+
+克隆仓库并安装依赖，完成项目构建：
 
 ```bash
 git clone https://github.com/Lastory/gemini-api2cli
 cd gemini-api2cli
 npm install
 npm run build
+```
+
+<!-- prettier-ignore -->
+> [!IMPORTANT]
+> 首次运行前，请务必根据根目录下的 `.env.example` 配置文件模板创建并配置本地 `.env` 文件（例如执行 `cp .env.example .env`），按需设置访问 Token、代理及工作进程等配置。默认访问 Token 为 `root`。
+
+#### 2. 启动服务
+
+通过 dotenv 载入 `.env` 环境变量并启动 a2a-server：
+
+```bash
 npm run start:a2a-server-dotenv
 ```
 
-启动后访问管理台：
+启动后访问管理后台：
 
 ```
 http://localhost:41242/manage
 ```
 
-首次访问需要输入 Token，默认值为 `root`。完整环境变量配置说明请参考根目录下的
-`.env.example`。
+在后台登录页输入 `.env` 中配置的访问 Token（默认为
+`root`），即可进行凭证授权与管理。
 
-### 版本更新
+#### 3. 版本更新
+
+后续拉取最新代码更新时，执行以下命令重新构建并启动：
 
 ```bash
 git pull
@@ -55,6 +72,20 @@ npm install
 npm run build
 npm run start:a2a-server-dotenv
 ```
+
+<!-- prettier-ignore -->
+> [!IMPORTANT]
+> 更新代码后，请注意检查 `.env.example` 是否有新增或变更的配置项，并及时同步补充到你的本地 `.env` 文件中。
+
+<!-- prettier-ignore -->
+> [!TIP]
+> 如果在 `npm run build` 时遇到类似 `'npm-run-all' 不是内部或外部命令` 或依赖缺失报错，说明跨版本更新时本地旧依赖缓存或符号链接异常，执行干净构建即可解决：
+>
+> ```bash
+> npm run clean
+> npm install
+> npm run build
+> ```
 
 ### Docker 部署（未充分测试，暂不推荐）
 

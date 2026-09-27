@@ -37,27 +37,43 @@ package names still refer to `gemini-cli` or `a2a-server`.
 - Node.js >= 20
 - npm >= 10
 
-### Local Setup
+### Local Deployment
+
+#### 1. Initial Installation
+
+Clone the repository, install dependencies, and build the project:
 
 ```bash
 git clone https://github.com/Lastory/gemini-api2cli
 cd gemini-api2cli
 npm install
-npm run build -w @google/gemini-cli-core -w @google/gemini-cli -w @google/gemini-cli-a2a-server
+npm run build
+```
+
+<!-- prettier-ignore -->
+> [!IMPORTANT]
+> Before running for the first time, make sure to create and configure your `.env` file based on `.env.example` in the root directory (for example, run `cp .env.example .env`). Configure access tokens, proxies, and worker options as needed. The default access token is `root`.
+
+#### 2. Starting the Service
+
+Start a2a-server with environment variables loaded from `.env`:
+
+```bash
 npm run start:a2a-server-dotenv
 ```
 
-Then open the management console:
+Then open the management console in your browser:
 
 ```
 http://localhost:41242/manage
 ```
 
-On first visit you will need to enter a token. The default is `root`. For all
-configurable environment variables, please refer to `.env.example` in the root
-directory.
+Enter the access token configured in your `.env` (default is `root`) to log in
+and manage credentials.
 
-### Updating
+#### 3. Updating
+
+When pulling the latest updates from the repository, rebuild and restart:
 
 ```bash
 git pull
@@ -65,6 +81,20 @@ npm install
 npm run build
 npm run start:a2a-server-dotenv
 ```
+
+<!-- prettier-ignore -->
+> [!IMPORTANT]
+> After updating, check `.env.example` for any new or modified configuration options, and update your local `.env` file accordingly.
+
+<!-- prettier-ignore -->
+> [!TIP]
+> If you encounter errors such as `'npm-run-all' is not recognized` or missing dependencies during `npm run build`, your local cache or binary links may be corrupted after updating. Perform a clean build to resolve it:
+>
+> ```bash
+> npm run clean
+> npm install
+> npm run build
+> ```
 
 ### Docker Deployment (Untested, Not Recommended)
 
