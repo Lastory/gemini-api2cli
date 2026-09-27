@@ -24,6 +24,7 @@ import { CoderAgentExecutor } from '../agent/executor.js';
 import { requestStorage } from './requestStorage.js';
 // [a2a-server-patch] Prompt API router
 import { createPromptApiRouter } from './promptApi.js';
+import { cleanStaleAcpTempDirs } from './acpProcessPool.js';
 import { loadConfig, loadEnvironment, setTargetDir } from '../config/config.js';
 import { loadSettings } from '../config/settings.js';
 import { loadExtensions } from '../config/extension.js';
@@ -474,6 +475,9 @@ export async function main() {
         `[CoreAgent] Agent Card: http://localhost:${actualPort}/.well-known/agent-card.json`,
       );
       logger.info('[CoreAgent] Press Ctrl+C to stop the server');
+
+      // Clean up stale ACP worker directories left behind by prior crashed/killed runs
+      void cleanStaleAcpTempDirs().catch(() => {});
     });
   } catch (error) {
     logger.error('[CoreAgent] Error during startup:', error);

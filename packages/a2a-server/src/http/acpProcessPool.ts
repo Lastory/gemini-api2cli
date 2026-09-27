@@ -6,7 +6,15 @@
 
 import type { ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
-import { mkdtemp, rm, mkdir, copyFile, unlink } from 'node:fs/promises';
+import {
+  mkdtemp,
+  rm,
+  mkdir,
+  copyFile,
+  unlink,
+  readdir,
+  stat,
+} from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from '@google/gemini-cli-core';
 import * as path from 'node:path';
@@ -270,6 +278,7 @@ export class AcpWorker {
   private idleTimeoutMs: number;
   private _lastActivity = Date.now();
   private tempDir: string | undefined;
+  private shutdownPromise: Promise<void> | undefined;
   private workspaceCwd: string | undefined;
   private defaultSessionId: string | undefined;
   private onDead: (() => void) | undefined;
@@ -450,6 +459,7 @@ export class AcpWorker {
         }
         this.promptListeners.clear();
         this.onDead?.();
+        void this.cleanupTempDir();
       }
     });
 
@@ -874,10 +884,37 @@ export class AcpWorker {
     }
   }
 
+  private async cleanupTempDir(): Promise<void> {
+    if (!this.tempDir) return;
+    const dir = this.tempDir;
+    this.tempDir = undefined;
+    try {
+      await rm(dir, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
+      logger.debug(`[ACP] Cleaned up temp dir: ${dir}`);
+    } catch (err) {
+      logger.warn(
+        `[ACP] Failed to clean up worker temp dir ${dir}: ${extractErrorMessage(err)}`,
+      );
+    }
+  }
+
   /**
    * Shut down this worker, kill the process.
    */
   async shutdown(): Promise<void> {
+    if (this.shutdownPromise) {
+      return this.shutdownPromise;
+    }
+    this.shutdownPromise = this.doShutdown();
+    return this.shutdownPromise;
+  }
+
+  private async doShutdown(): Promise<void> {
     this._state = 'dead';
     this.clearIdleTimer();
     this.stopKeepalive();
@@ -890,19 +927,33 @@ export class AcpWorker {
     this.sessions.clear();
 
     if (this.child) {
-      this.child.kill();
+      const child = this.child;
       this.child = undefined;
+      const exitPromise = new Promise<void>((resolve) => {
+        if (child.exitCode !== null || child.signalCode !== null) {
+          resolve();
+          return;
+        }
+        const onDone = () => resolve();
+        child.once('close', onDone);
+        child.once('exit', onDone);
+      });
+
+      try {
+        child.kill();
+      } catch {
+        // Child may already have exited
+      }
+
+      // Wait up to 3s for the child process to fully exit and release directory locks
+      await Promise.race([
+        exitPromise,
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ]);
     }
     this.connection = undefined;
 
-    if (this.tempDir) {
-      try {
-        await rm(this.tempDir, { recursive: true, force: true });
-      } catch {
-        // ignore cleanup errors
-      }
-      this.tempDir = undefined;
-    }
+    await this.cleanupTempDir();
 
     logger.info(`[ACP] Worker shut down for credential ${this.credentialId}`);
   }
@@ -996,6 +1047,16 @@ export class AcpWorker {
   }
 }
 
+const activePools = new Set<AcpProcessPool>();
+
+/**
+ * Shut down all active ACP process pools. Used during server shutdown.
+ */
+export async function shutdownAllAcpPools(): Promise<void> {
+  const pools = Array.from(activePools);
+  await Promise.all(pools.map((p) => p.destroyAll()));
+}
+
 /**
  * Pool of ACP workers, one per credential.
  */
@@ -1005,6 +1066,7 @@ export class AcpProcessPool {
 
   constructor(deps: AcpPoolDeps) {
     this.deps = deps;
+    activePools.add(this);
   }
 
   /**
@@ -1135,6 +1197,7 @@ export class AcpProcessPool {
     );
     this.workers.clear();
     await Promise.all(shutdowns);
+    activePools.delete(this);
     logger.info('[ACP] All workers destroyed');
   }
 
@@ -1246,4 +1309,56 @@ export class AcpProcessPool {
   get size(): number {
     return this.workers.size;
   }
+}
+
+/**
+ * Clean up stale `gemini-acp-*` temporary directories left behind
+ * by previous crashed or killed server runs.
+ *
+ * @param maxAgeMs Maximum age in ms for a directory to be considered stale (default: 1 hour).
+ * @returns Number of stale directories successfully cleaned up.
+ */
+export async function cleanStaleAcpTempDirs(
+  maxAgeMs = 60 * 60 * 1000,
+): Promise<number> {
+  const tempBase = tmpdir();
+  let cleanedCount = 0;
+  try {
+    const entries = await readdir(tempBase, { withFileTypes: true });
+    const now = Date.now();
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith('gemini-acp-')) {
+        continue;
+      }
+      const dirPath = path.join(tempBase, entry.name);
+      try {
+        const stats = await stat(dirPath);
+        const age = now - stats.mtimeMs;
+        if (age >= maxAgeMs) {
+          await rm(dirPath, {
+            recursive: true,
+            force: true,
+            maxRetries: 3,
+            retryDelay: 100,
+          });
+          cleanedCount++;
+        }
+      } catch (err) {
+        // Locked by active processes or already removed — safely skip
+        logger.debug(
+          `[ACP] Skipping temp dir ${entry.name}: ${extractErrorMessage(err)}`,
+        );
+      }
+    }
+    if (cleanedCount > 0) {
+      logger.info(
+        `[ACP] Cleaned up ${String(cleanedCount)} stale gemini-acp temp directories`,
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      `[ACP] Failed to sweep stale temp dirs: ${extractErrorMessage(err)}`,
+    );
+  }
+  return cleanedCount;
 }
