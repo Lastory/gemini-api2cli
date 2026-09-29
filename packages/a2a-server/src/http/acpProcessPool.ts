@@ -213,8 +213,15 @@ export function buildAcpChildEnv(
   } else {
     env['GOOGLE_GENAI_USE_GCA'] = 'true';
     delete env['GOOGLE_GENAI_USE_VERTEXAI'];
-    delete env['GOOGLE_CLOUD_PROJECT'];
-    delete env['GOOGLE_CLOUD_PROJECT_ID'];
+    const effectiveProject =
+      credentialRecord?.project?.trim() || process.env['GOOGLE_CLOUD_PROJECT'];
+    if (effectiveProject) {
+      env['GOOGLE_CLOUD_PROJECT'] = effectiveProject;
+      env['GOOGLE_CLOUD_PROJECT_ID'] = effectiveProject;
+    } else {
+      delete env['GOOGLE_CLOUD_PROJECT'];
+      delete env['GOOGLE_CLOUD_PROJECT_ID'];
+    }
     delete env['GOOGLE_CLOUD_LOCATION'];
     delete env['GOOGLE_APPLICATION_CREDENTIALS'];
     delete env['GOOGLE_API_KEY'];
@@ -772,6 +779,20 @@ export class AcpWorker {
     if (currentType !== newType) {
       throw new Error(
         `Cannot switch between different credential types (${currentType} vs ${newType}) in a running worker`,
+      );
+    }
+
+    const currentProject =
+      this.credentialRecord?.project?.trim() ||
+      process.env['GOOGLE_CLOUD_PROJECT'] ||
+      '';
+    const nextProject =
+      newCredentialRecord?.project?.trim() ||
+      process.env['GOOGLE_CLOUD_PROJECT'] ||
+      '';
+    if (currentProject !== nextProject) {
+      throw new Error(
+        `Cannot switch worker across different project IDs (${currentProject} vs ${nextProject})`,
       );
     }
 

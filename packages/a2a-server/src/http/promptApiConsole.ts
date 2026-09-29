@@ -354,6 +354,10 @@ a{color:var(--accent);text-decoration:none}
           <span class="label" id="t-cred-label">Credential Label</span>
           <input id="login-label" class="input" placeholder="e.g. Main Google Account"/>
         </div>
+        <div class="field">
+          <span class="label" id="t-cred-project">GCP Project ID (Optional)</span>
+          <input id="login-project" class="input" placeholder="e.g. my-project-12345 (optional)"/>
+        </div>
         <div class="row">
           <button class="btn btn-primary" id="start-login-btn">Start Login</button>
           <button class="btn btn-ghost" id="open-auth-btn" disabled>Open Auth URL</button>
@@ -814,6 +818,8 @@ const I = {
     startLoginDesc: 'Initiate a Google OAuth flow for a new credential.',
     credLabel: 'Credential Label',
     credLabelPh: 'e.g. Main Google Account',
+    credProject: 'GCP Project ID (Optional)',
+    credProjectPh: 'e.g. my-project-12345 (optional)',
     openAuthUrl: 'Open Auth URL',
     authUrl: 'Auth URL',
     authUrlPh: 'Auth URL will appear here after starting login...',
@@ -1074,6 +1080,8 @@ const I = {
     startLoginDesc: '为新凭据发起一次 Google OAuth 登录流程。',
     credLabel: '凭据名称',
     credLabelPh: '例如：主 Google 账号',
+    credProject: 'GCP 项目 ID（可选）',
+    credProjectPh: '例如：my-project-12345（留空使用全局配置或服务端分配）',
     openAuthUrl: '打开授权链接',
     authUrl: '授权链接',
     authUrlPh: '开始登录后，授权链接会显示在这里...',
@@ -1345,6 +1353,10 @@ function applyLang() {
   $('t-start-login-desc').textContent = t('startLoginDesc');
   $('t-cred-label').textContent = t('credLabel');
   $('login-label').placeholder = t('credLabelPh');
+  const credProjectEl = $('t-cred-project');
+  if (credProjectEl) credProjectEl.textContent = t('credProject');
+  const loginProjectEl = $('login-project');
+  if (loginProjectEl) loginProjectEl.placeholder = t('credProjectPh');
   $('start-login-btn').textContent = t('startLogin');
   $('open-auth-btn').textContent = t('openAuthUrl');
   $('t-auth-url').textContent = t('authUrl');
@@ -1802,7 +1814,10 @@ function renderCreds(payload) {
       if (c.baseUrl) parts.push('Custom URL');
       subtitle = parts.join(' | ') || 'Vertex';
     } else {
-      subtitle = c.email ? esc(c.email) : esc(t('notLoggedIn'));
+      const parts = [];
+      if (c.email) parts.push(esc(c.email));
+      if (c.project) parts.push('Project: ' + esc(c.project));
+      subtitle = parts.join(' | ') || esc(t('notLoggedIn'));
     }
 
     const selectBtn = c.disabled
@@ -2200,7 +2215,11 @@ $('start-login-btn').onclick = async () => {
     setNotice('');
     const p = await api('/v1/credentials/login',{
       method:'POST',
-      body:JSON.stringify({label:$('login-label').value.trim()||undefined, flow:'manual_code'}),
+      body:JSON.stringify({
+        label:$('login-label').value.trim()||undefined,
+        project:$('login-project').value.trim()||undefined,
+        flow:'manual_code'
+      }),
     });
     S.loginId = p.login.loginId;
     sessionStorage.setItem(LOGIN_ID_KEY, S.loginId);

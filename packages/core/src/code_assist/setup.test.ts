@@ -177,6 +177,22 @@ describe('setupUser', () => {
       );
     });
 
+    it('should prioritize overrideProjectId over GOOGLE_CLOUD_PROJECT', async () => {
+      vi.stubEnv('GOOGLE_CLOUD_PROJECT', 'env-project');
+      mockLoad.mockResolvedValue({
+        currentTier: mockPaidTier,
+      });
+      await setupUser({} as OAuth2Client, mockConfig, {}, 'override-project');
+      expect(CodeAssistServer).toHaveBeenCalledWith(
+        {},
+        'override-project',
+        {},
+        '',
+        undefined,
+        undefined,
+      );
+    });
+
     it('should pass httpOptions to CodeAssistServer when provided', async () => {
       vi.stubEnv('GOOGLE_CLOUD_PROJECT', 'test-project');
       mockLoad.mockResolvedValue({

@@ -164,10 +164,12 @@ export class PromptCredentialStore {
   async createCredential(
     label?: string,
     credentialId?: string,
+    project?: string,
   ): Promise<PromptApiCredentialRecord> {
     const id = credentialId ?? randomUUID();
     assertSafeCredentialId(id);
     const now = new Date().toISOString();
+    const trimmedProject = project?.trim();
     const record: PromptApiCredentialRecord = {
       id,
       type: 'oauth',
@@ -175,6 +177,7 @@ export class PromptCredentialStore {
       createdAt: now,
       updatedAt: now,
       disabled: false,
+      ...(trimmedProject ? { project: trimmedProject } : {}),
     };
 
     await mkdir(this.getCredentialDir(id), { recursive: true });
@@ -184,6 +187,37 @@ export class PromptCredentialStore {
       'utf8',
     );
     return record;
+  }
+
+  async updateCredentialProject(
+    credentialId: string,
+    project?: string,
+  ): Promise<PromptApiCredentialRecord> {
+    return this.withCredentialLock(credentialId, async () => {
+      const existing = await this.getCredential(credentialId);
+      if (!existing) {
+        throw new Error(`Credential not found: ${credentialId}`);
+      }
+
+      const now = new Date().toISOString();
+      const trimmedProject = project?.trim();
+      const updated: PromptApiCredentialRecord = {
+        ...existing,
+        ...(trimmedProject ? { project: trimmedProject } : {}),
+        updatedAt: now,
+      };
+      if (!trimmedProject) {
+        delete updated.project;
+      }
+
+      await writeFile(
+        this.getCredentialMetadataPath(credentialId),
+        JSON.stringify(updated, null, 2),
+        'utf8',
+      );
+
+      return updated;
+    });
   }
 
   async createVertexCredential(

@@ -29,7 +29,11 @@ import {
   type PromptApiDependencies,
 } from './promptApi.js';
 import { PromptCredentialStore } from './promptCredentialStore.js';
-import { buildAcpChildEnv, type AcpPoolSettings } from './acpProcessPool.js';
+import {
+  AcpWorker,
+  buildAcpChildEnv,
+  type AcpPoolSettings,
+} from './acpProcessPool.js';
 
 const TEST_TOKEN = 'test-token-for-vertex-tests';
 process.env['GEMINI_PROMPT_API_TOKEN'] = TEST_TOKEN;
@@ -177,6 +181,34 @@ describe('Vertex AI Authentication & Credentials', () => {
       const loaded = await store.getCredential(cred.id);
       expect(loaded?.serviceTier).toBe('flex');
     });
+
+    it('creates and updates OAuth credential with custom project ID', async () => {
+      const root = mkdtempSync(path.join(tmpdir(), 'oauth-store-'));
+      tempDirs.push(root);
+      const store = new PromptCredentialStore(root);
+
+      const cred = await store.createCredential(
+        'My OAuth',
+        'oauth-cred-1',
+        'my-oauth-project',
+      );
+      expect(cred.project).toBe('my-oauth-project');
+
+      const metaPath = path.join(root, 'credentials', cred.id, 'metadata.json');
+      const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
+      expect(meta.project).toBe('my-oauth-project');
+
+      // Update project
+      const updated = await store.updateCredentialProject(
+        cred.id,
+        'updated-oauth-project',
+      );
+      expect(updated.project).toBe('updated-oauth-project');
+
+      // Clear project
+      const cleared = await store.updateCredentialProject(cred.id, undefined);
+      expect(cleared.project).toBeUndefined();
+    });
   });
 
   describe('buildAcpChildEnv Environment Setup', () => {
@@ -231,23 +263,54 @@ describe('Vertex AI Authentication & Credentials', () => {
       expect(env['GOOGLE_APPLICATION_CREDENTIALS']).toBeUndefined();
     });
 
-    it('sets GCA environment variables for oauth credentials', () => {
+    it('sets GCA environment variables for oauth credentials with 3-tier fallback', () => {
       const fakeHome = mkdtempSync(path.join(tmpdir(), 'vtx-home-'));
       tempDirs.push(fakeHome);
 
-      const env = buildAcpChildEnv(fakeHome, defaultAcpSettings, {
-        id: 'cred-oauth',
+      // Case 1: Credential has its own project (takes precedence over env)
+      vi.stubEnv('GOOGLE_CLOUD_PROJECT', 'env-gcp-project');
+      const envWithProject = buildAcpChildEnv(fakeHome, defaultAcpSettings, {
+        id: 'cred-oauth-1',
         type: 'oauth',
-        label: 'Test OAuth',
+        label: 'OAuth with Project',
+        project: 'cred-gcp-project',
         createdAt: '2026-01-01T00:00:00Z',
         updatedAt: '2026-01-01T00:00:00Z',
       });
+      expect(envWithProject['GOOGLE_GENAI_USE_GCA']).toBe('true');
+      expect(envWithProject['GOOGLE_GENAI_USE_VERTEXAI']).toBeUndefined();
+      expect(envWithProject['GOOGLE_CLOUD_PROJECT']).toBe('cred-gcp-project');
+      expect(envWithProject['GOOGLE_CLOUD_PROJECT_ID']).toBe(
+        'cred-gcp-project',
+      );
 
-      expect(env['GOOGLE_GENAI_USE_GCA']).toBe('true');
-      expect(env['GOOGLE_GENAI_USE_VERTEXAI']).toBeUndefined();
-      expect(env['GOOGLE_CLOUD_PROJECT']).toBeUndefined();
-      expect(env['GOOGLE_CLOUD_LOCATION']).toBeUndefined();
-      expect(env['GOOGLE_APPLICATION_CREDENTIALS']).toBeUndefined();
+      // Case 2: Credential has no project, falls back to env
+      const envFallback = buildAcpChildEnv(fakeHome, defaultAcpSettings, {
+        id: 'cred-oauth-2',
+        type: 'oauth',
+        label: 'OAuth Fallback to Env',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      });
+      expect(envFallback['GOOGLE_CLOUD_PROJECT']).toBe('env-gcp-project');
+      expect(envFallback['GOOGLE_CLOUD_PROJECT_ID']).toBe('env-gcp-project');
+
+      // Case 3: Neither credential nor env has project (delegates to server)
+      vi.stubEnv('GOOGLE_CLOUD_PROJECT', '');
+      const envServerDelegated = buildAcpChildEnv(
+        fakeHome,
+        defaultAcpSettings,
+        {
+          id: 'cred-oauth-3',
+          type: 'oauth',
+          label: 'OAuth Server Delegated',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      );
+      expect(envServerDelegated['GOOGLE_CLOUD_PROJECT']).toBeUndefined();
+      expect(envServerDelegated['GOOGLE_CLOUD_PROJECT_ID']).toBeUndefined();
+      expect(envServerDelegated['GOOGLE_GENAI_USE_GCA']).toBe('true');
     });
 
     it('sets VERTEX_AI_SHARED_REQUEST_TYPE when serviceTier is flex or priority', () => {
@@ -810,6 +873,68 @@ describe('Vertex AI Authentication & Credentials', () => {
         .send({ serviceTier: 'flex' });
       expect(notFoundRes.status).toBe(404);
       expect(notFoundRes.body.error).toContain('not found');
+    });
+
+    it('updates OAuth project via PATCH /v1/credentials/:id', async () => {
+      const root = mkdtempSync(path.join(tmpdir(), 'api-oauth-'));
+      tempDirs.push(root);
+      const store = new PromptCredentialStore(root);
+      const cred = await store.createCredential(
+        'Test OAuth',
+        'oauth-patch-1',
+        'initial-project',
+      );
+
+      const workspaceRoot = mkdtempSync(path.join(tmpdir(), 'api-oauth-ws-'));
+      tempDirs.push(workspaceRoot);
+      const fakeCliEntry = path.join(workspaceRoot, 'fake-cli.js');
+      writeFileSync(fakeCliEntry, '// fake\n');
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot: root,
+        sourceGeminiCliHome: root,
+        timeoutMs: 5000,
+      });
+
+      const patchRes = await request(app)
+        .patch(PROMPT_API_CREDENTIAL_ROUTE.replace(':credentialId', cred.id))
+        .send({ project: 'patched-project' });
+
+      expect(patchRes.status).toBe(200);
+      expect(patchRes.body.credential.project).toBe('patched-project');
+
+      const loaded = await store.getCredential(cred.id);
+      expect(loaded?.project).toBe('patched-project');
+    });
+
+    it('rejects switchCredential when effective project ID differs', async () => {
+      const worker = new AcpWorker('test-cred', 0);
+      (worker as unknown as { _state: string })._state = 'ready';
+      (worker as unknown as { tempDir: string }).tempDir = '/fake/temp';
+      (worker as unknown as { connection: unknown }).connection = {
+        authenticate: vi.fn(),
+      };
+      (worker as unknown as { credentialRecord: unknown }).credentialRecord = {
+        id: 'test-cred-1',
+        type: 'oauth',
+        label: 'OAuth 1',
+        project: 'project-1',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      };
+
+      await expect(
+        worker.switchCredential('test-cred-2', '/fake/home2', {
+          id: 'test-cred-2',
+          type: 'oauth',
+          label: 'OAuth 2',
+          project: 'project-2',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        }),
+      ).rejects.toThrow('Cannot switch worker across different project IDs');
     });
   });
 });

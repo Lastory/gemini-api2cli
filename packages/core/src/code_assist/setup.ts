@@ -125,8 +125,10 @@ export async function setupUser(
   client: AuthClient,
   config: Config,
   httpOptions: HttpOptions = {},
+  overrideProjectId?: string,
 ): Promise<UserData> {
   const projectId =
+    overrideProjectId?.trim() ||
     process.env['GOOGLE_CLOUD_PROJECT'] ||
     process.env['GOOGLE_CLOUD_PROJECT_ID'] ||
     undefined;

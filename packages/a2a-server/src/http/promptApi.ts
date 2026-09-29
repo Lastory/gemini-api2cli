@@ -197,6 +197,7 @@ const PROMPT_API_MODEL_ALIASES = [
 type PromptCredentialLoginRequestBody = {
   credentialId?: unknown;
   label?: unknown;
+  project?: unknown;
   flow?: unknown;
 };
 type PromptCredentialLoginCompleteRequestBody = {
@@ -909,7 +910,12 @@ async function getPromptApiCredentialQuotaPayload(
     const configShim = {
       getValidationHandler: () => undefined,
     } as unknown as Config;
-    const userData = await setupUser(client, configShim);
+    const userData = await setupUser(
+      client,
+      configShim,
+      {},
+      credential.project,
+    );
     const codeAssistServer = new CodeAssistServer(
       client,
       userData.projectId,
@@ -1016,6 +1022,7 @@ async function getEffectiveSourceGeminiCliHome(
 function normalizeCredentialLoginBody(body: unknown): {
   credentialId?: string;
   label?: string;
+  project?: string;
   flow: PromptCredentialLoginFlow;
 } {
   if (body === undefined || body === null) {
@@ -1056,9 +1063,17 @@ function normalizeCredentialLoginBody(body: unknown): {
     );
   }
 
+  if (
+    typedBody.project !== undefined &&
+    typeof typedBody.project !== 'string'
+  ) {
+    throw new BadRequestError('"project" must be a string when provided.');
+  }
+
   return {
     credentialId: typedBody.credentialId?.trim(),
     label: typedBody.label?.trim(),
+    project: typedBody.project?.trim() || undefined,
     flow:
       (typedBody.flow as PromptCredentialLoginFlow | undefined) ?? 'loopback',
   };
@@ -1134,13 +1149,23 @@ async function startPromptApiCredentialLogin(
   credential: PromptApiCredentialRecord;
   loginJob: PromptCredentialLoginJob;
 }> {
-  const { credentialId, label, flow } = normalizeCredentialLoginBody(body);
+  const { credentialId, label, project, flow } =
+    normalizeCredentialLoginBody(body);
   const existingCredential = credentialId
     ? await state.credentialStore.getCredential(credentialId)
     : undefined;
-  const credential =
-    existingCredential ??
-    (await state.credentialStore.createCredential(label, credentialId));
+  const credential = existingCredential
+    ? project !== undefined
+      ? await state.credentialStore.updateCredentialProject(
+          existingCredential.id,
+          project,
+        )
+      : existingCredential
+    : await state.credentialStore.createCredential(
+        label,
+        credentialId,
+        project,
+      );
 
   await mkdir(state.credentialStore.getCredentialHomeDir(credential.id), {
     recursive: true,
@@ -3226,7 +3251,12 @@ export function createPromptApiRouter(
       } as unknown as Config;
       let projectId: string;
       try {
-        const userData = await setupUser(client, configShim);
+        const userData = await setupUser(
+          client,
+          configShim,
+          {},
+          credential?.project,
+        );
         projectId = userData.projectId;
       } catch (setupErr: unknown) {
         const setupMsg = extractErrorMessage(setupErr);
@@ -4150,9 +4180,33 @@ export function createPromptApiRouter(
         }
       }
 
-      if (!('disabled' in req.body) && !('serviceTier' in req.body)) {
+      if ('project' in req.body) {
+        const rawProject = req.body['project'];
+        if (rawProject !== null && typeof rawProject !== 'string') {
+          throw new BadRequestError(
+            '"project" must be a string or null when provided.',
+          );
+        }
+        const normalizedProject =
+          typeof rawProject === 'string' && rawProject.trim().length > 0
+            ? rawProject.trim()
+            : undefined;
+        updated = await state.credentialStore.updateCredentialProject(
+          credentialId,
+          normalizedProject,
+        );
+        if (state.acpPool) {
+          await state.acpPool.destroy(credentialId);
+        }
+      }
+
+      if (
+        !('disabled' in req.body) &&
+        !('serviceTier' in req.body) &&
+        !('project' in req.body)
+      ) {
         throw new BadRequestError(
-          'At least one field ("disabled" or "serviceTier") must be provided.',
+          'At least one field ("disabled", "serviceTier", or "project") must be provided.',
         );
       }
 

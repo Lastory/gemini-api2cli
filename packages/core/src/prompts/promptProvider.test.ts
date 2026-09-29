@@ -461,9 +461,9 @@ describe('PromptProvider', () => {
     });
 
     it('should gracefully fallback to full when getPromptInjectionLevel is undefined', () => {
-      (
-        mockConfig as unknown as Record<string, unknown>
-      ).getPromptInjectionLevel = undefined;
+      (mockConfig as unknown as Record<string, unknown>)[
+        'getPromptInjectionLevel'
+      ] = undefined;
 
       const provider = new PromptProvider();
       const prompt = provider.getCoreSystemPrompt(mockConfig);
