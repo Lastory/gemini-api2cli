@@ -735,7 +735,12 @@ export class GeminiClient {
       lastMessage.role === 'model' &&
       (lastMessage.parts?.some((p) => 'functionCall' in p) || false);
 
-    if (this.config.getIdeMode() && !hasPendingToolCall) {
+    // [a2a-server-patch] Only inject IDE context in full prompt injection mode
+    if (
+      this.config.getIdeMode() &&
+      !hasPendingToolCall &&
+      (this.config.getPromptInjectionLevel?.() ?? 'full') === 'full'
+    ) {
       const { contextParts, newIdeContext } = this.getIdeContextParts(
         this.forceFullIdeContext || history.length === 0,
       );

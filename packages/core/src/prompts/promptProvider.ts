@@ -71,9 +71,11 @@ export class PromptProvider {
     const approvedPlanPath = context.config.getApprovedPlanPath();
 
     // [a2a-server-patch] BEGIN: Prompt injection level checks (full/reduced/minimal)
-    const injectionLevel = context.config.getPromptInjectionLevel();
+    const injectionLevel = context.config.getPromptInjectionLevel?.() ?? 'full';
+    if (injectionLevel === 'minimal') {
+      return '';
+    }
     const isFull = injectionLevel === 'full';
-    const isNotMinimal = injectionLevel !== 'minimal';
     // [a2a-server-patch] END: Prompt injection level checks
 
     const desiredModel = resolveModel(
@@ -146,14 +148,10 @@ export class PromptProvider {
           !!userMemory.project?.trim());
 
       const options: snippets.SystemPromptOptions = {
-        preamble: this.withSection(
-          'preamble',
-          () => ({
-            interactive: interactiveMode,
-            approvalMode,
-          }),
-          isNotMinimal,
-        ),
+        preamble: this.withSection('preamble', () => ({
+          interactive: interactiveMode,
+          approvalMode,
+        })),
         coreMandates: this.withSection(
           'coreMandates',
           () => ({
@@ -175,7 +173,7 @@ export class PromptProvider {
                 name: d.name,
                 description: d.description,
               })),
-          enabledToolNames.has(AGENT_TOOL_NAME) && isNotMinimal,
+          enabledToolNames.has(AGENT_TOOL_NAME),
         ),
         agentSkills: this.withSection(
           'agentSkills',
@@ -185,9 +183,9 @@ export class PromptProvider {
               description: s.description,
               location: s.location,
             })),
-          skills.length > 0 && isNotMinimal,
+          skills.length > 0,
         ),
-        taskTracker: isNotMinimal ? trackerDir : undefined,
+        taskTracker: isFull ? trackerDir : undefined,
         hookContext: isSectionEnabled('hookContext') || undefined,
         primaryWorkflows: this.withSection(
           'primaryWorkflows',
@@ -249,29 +247,26 @@ export class PromptProvider {
           }),
           isFull,
         ),
-        sandbox: this.withSection(
-          'sandbox',
-          () => ({
-            mode: getSandboxMode(),
-            toolSandboxingEnabled: context.config.getSandboxEnabled(),
-          }),
-          isNotMinimal,
-        ),
+        sandbox: this.withSection('sandbox', () => ({
+          mode: getSandboxMode(),
+          toolSandboxingEnabled: context.config.getSandboxEnabled(),
+        })),
         interactiveYoloMode: this.withSection(
           'interactiveYoloMode',
           () => true,
-          isYoloMode && interactiveMode && isNotMinimal,
+          isYoloMode && interactiveMode,
         ),
         gitRepo: this.withSection(
           'git',
           () => ({ interactive: interactiveMode }),
           isGitRepository(process.cwd()) && isFull ? true : false,
         ),
-        finalReminder: isModernModel
-          ? undefined
-          : this.withSection('finalReminder', () => ({
-              readFileToolName: READ_FILE_TOOL_NAME,
-            })),
+        finalReminder:
+          isModernModel || !isFull
+            ? undefined
+            : this.withSection('finalReminder', () => ({
+                readFileToolName: READ_FILE_TOOL_NAME,
+              })),
       } as snippets.SystemPromptOptions;
 
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
@@ -282,18 +277,18 @@ export class PromptProvider {
     }
 
     // --- Finalization (Shell) ---
-    // [a2a-server-patch] Pass userMemory/contextFilenames only when not minimal
+    // [a2a-server-patch] Pass userMemory/contextFilenames only when full (reduced suppresses code conventions)
     const finalPrompt = activeSnippets.renderFinalShell(
       basePrompt,
-      isNotMinimal ? userMemory : undefined,
-      isNotMinimal ? contextFilenames : undefined,
+      isFull ? userMemory : undefined,
+      isFull ? contextFilenames : undefined,
     );
 
     // Sanitize erratic newlines from composition
     let sanitizedPrompt = finalPrompt.replace(/\n{3,}/g, '\n\n');
 
     // Context Reinjection (Active Topic)
-    if (isTopicUpdateNarrationEnabled) {
+    if (isTopicUpdateNarrationEnabled && isFull) {
       const activeTopic = context.config.topicState.getTopic();
       if (activeTopic) {
         const sanitizedTopic = activeTopic

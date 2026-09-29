@@ -980,7 +980,8 @@ export class GeminiChat {
         // [a2a-server-patch] END: Merge generationConfig override
         // TODO(12622): Ensure we don't overrwrite these when they are
         // passed via config.
-        systemInstruction: this.systemInstruction,
+        // [a2a-server-patch] Pass systemInstruction only when non-empty to prevent sending empty string to API
+        systemInstruction: this.systemInstruction || undefined,
         tools: this.tools,
         abortSignal,
       };

@@ -48,6 +48,11 @@ ${folderStructure}`;
  * @returns A promise that resolves to an array of `Part` objects containing environment information.
  */
 export async function getEnvironmentContext(config: Config): Promise<Part[]> {
+  // [a2a-server-patch] Skip environment context in minimal prompt injection mode
+  if (config.getPromptInjectionLevel?.() === 'minimal') {
+    return [];
+  }
+
   const today = new Date().toLocaleDateString(undefined, {
     weekday: 'long',
     year: 'numeric',
@@ -63,7 +68,11 @@ export async function getEnvironmentContext(config: Config): Promise<Part[]> {
   // - Tier 1 (global): system instruction only
   // - Tier 2 (extension + project): first user message (here)
   // - Tier 3 (subdirectory): tool output (JIT)
-  const environmentMemory = config.getSessionMemory();
+  // [a2a-server-patch] Only include project/extension memory in full injection mode (reduced suppresses code conventions)
+  const environmentMemory =
+    (config.getPromptInjectionLevel?.() ?? 'full') === 'full'
+      ? config.getSessionMemory()
+      : '';
 
   const context = `
 <session_context>
@@ -86,7 +95,7 @@ export async function getInitialChatHistory(
   extraHistory?: ReadonlyArray<Content | HistoryTurn>,
 ): Promise<Array<Content | HistoryTurn>> {
   // [a2a-server-patch] Skip environment context in minimal prompt injection mode
-  if (config.getPromptInjectionLevel() === 'minimal') {
+  if (config.getPromptInjectionLevel?.() === 'minimal') {
     return [...(extraHistory ?? [])];
   }
 

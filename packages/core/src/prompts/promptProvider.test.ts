@@ -89,6 +89,7 @@ describe('PromptProvider', () => {
       isTrackerEnabled: vi.fn().mockReturnValue(false),
       getHasAccessToPreviewModel: vi.fn().mockReturnValue(true),
       getGemini31LaunchedSync: vi.fn().mockReturnValue(true),
+      getPromptInjectionLevel: vi.fn().mockReturnValue('full'),
     } as unknown as Config;
   });
 
@@ -422,6 +423,53 @@ describe('PromptProvider', () => {
       expect(prompt).toContain(UPDATE_TOPIC_TOOL_NAME);
       expect(prompt).toContain('No Chitchat');
       expect(prompt).toContain('Topic Model');
+    });
+  });
+
+  describe('Prompt Injection Level (full/reduced/minimal)', () => {
+    it('should return empty string when injection level is minimal', () => {
+      vi.mocked(mockConfig.getPromptInjectionLevel).mockReturnValue('minimal');
+      vi.mocked(mockConfig.isTopicUpdateNarrationEnabled).mockReturnValue(true);
+      mockConfig.topicState.setTopic('Active Chapter');
+
+      const provider = new PromptProvider();
+      const prompt = provider.getCoreSystemPrompt(
+        mockConfig,
+        'User memory content that should be suppressed',
+      );
+
+      expect(prompt).toBe('');
+    });
+
+    it('should suppress engineering mandates, workflows, guidelines, and memory in reduced mode', () => {
+      vi.mocked(mockConfig.getPromptInjectionLevel).mockReturnValue('reduced');
+
+      const provider = new PromptProvider();
+      const prompt = provider.getCoreSystemPrompt(
+        mockConfig,
+        'Project code conventions',
+      );
+
+      // Should keep preamble
+      expect(prompt).toContain('You are Gemini CLI');
+      // Should suppress engineering sections
+      expect(prompt).not.toContain('# Core Mandates');
+      expect(prompt).not.toContain('# Primary Workflows');
+      expect(prompt).not.toContain('# Operational Guidelines');
+      expect(prompt).not.toContain('# Contextual Instructions');
+      expect(prompt).not.toContain('Project code conventions');
+    });
+
+    it('should gracefully fallback to full when getPromptInjectionLevel is undefined', () => {
+      (
+        mockConfig as unknown as Record<string, unknown>
+      ).getPromptInjectionLevel = undefined;
+
+      const provider = new PromptProvider();
+      const prompt = provider.getCoreSystemPrompt(mockConfig);
+
+      expect(prompt).toContain('You are Gemini CLI');
+      expect(prompt).toContain('# Core Mandates');
     });
   });
 });

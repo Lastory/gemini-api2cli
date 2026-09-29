@@ -20,6 +20,7 @@ describe('jit-context', () => {
       } as unknown as MemoryContextManager;
 
       mockConfig = {
+        getPromptInjectionLevel: vi.fn().mockReturnValue('full'),
         getMemoryContextManager: vi
           .fn()
           .mockReturnValue(mockMemoryContextManager),
@@ -27,6 +28,24 @@ describe('jit-context', () => {
           getDirectories: vi.fn().mockReturnValue(['/app']),
         }),
       } as unknown as Config;
+    });
+
+    it('should return empty string when injection level is minimal', async () => {
+      vi.mocked(mockConfig.getPromptInjectionLevel).mockReturnValue('minimal');
+
+      const result = await discoverJitContext(mockConfig, '/app/src/file.ts');
+
+      expect(result).toBe('');
+      expect(mockMemoryContextManager.discoverContext).not.toHaveBeenCalled();
+    });
+
+    it('should return empty string when injection level is reduced', async () => {
+      vi.mocked(mockConfig.getPromptInjectionLevel).mockReturnValue('reduced');
+
+      const result = await discoverJitContext(mockConfig, '/app/src/file.ts');
+
+      expect(result).toBe('');
+      expect(mockMemoryContextManager.discoverContext).not.toHaveBeenCalled();
     });
 
     it('should return empty string when memoryContextManager is undefined', async () => {

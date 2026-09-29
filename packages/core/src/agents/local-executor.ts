@@ -648,20 +648,25 @@ export class LocalAgentExecutor<TOutput extends z.ZodTypeAny> {
           );
         const formattedInitialHints = formatUserHintsForModel(initialHints);
 
-        // Inject loaded memory files. Some background agents opt out of
-        // extension memory while still retaining project session context.
+        // [a2a-server-patch] Check prompt injection level for subagent initial parts
+        const injectionLevel =
+          this.context.config.getPromptInjectionLevel?.() ?? 'full';
+
+        // Inject loaded memory files only in full injection mode.
         const environmentMemory =
-          this.definition.includeExtensionContext === false
-            ? this.context.config.getSessionMemory({
-                includeExtensionContext: false,
-              })
-            : this.context.config.getSessionMemory();
+          injectionLevel === 'full'
+            ? this.definition.includeExtensionContext === false
+              ? this.context.config.getSessionMemory({
+                  includeExtensionContext: false,
+                })
+              : this.context.config.getSessionMemory()
+            : '';
 
         const initialParts: Part[] = [];
         if (environmentMemory) {
           initialParts.push({ text: environmentMemory });
         }
-        if (formattedInitialHints) {
+        if (formattedInitialHints && injectionLevel !== 'minimal') {
           initialParts.push({ text: formattedInitialHints });
         }
         initialParts.push({ text: query });
@@ -1375,6 +1380,13 @@ export class LocalAgentExecutor<TOutput extends z.ZodTypeAny> {
     // Inject user inputs into the prompt template.
     let finalPrompt = templateString(promptConfig.systemPrompt, inputs);
 
+    // [a2a-server-patch] Respect prompt injection level in LocalAgentExecutor
+    const injectionLevel =
+      this.context.config.getPromptInjectionLevel?.() ?? 'full';
+    if (injectionLevel === 'minimal') {
+      return finalPrompt;
+    }
+
     // Inject skill SI if ACTIVATE_SKILL_TOOL_NAME is available to this agent.
     if (this.toolRegistry.getTool(ACTIVATE_SKILL_TOOL_NAME) !== undefined) {
       const skills = this.context.config.getSkillManager().getSkills();
@@ -1390,10 +1402,12 @@ export class LocalAgentExecutor<TOutput extends z.ZodTypeAny> {
       }
     }
 
-    // Append memory context if available.
-    const systemMemory = this.context.config.getSystemInstructionMemory();
-    if (systemMemory) {
-      finalPrompt += `\n\n${renderUserMemory(systemMemory)}`;
+    // Append memory context if available (only in full injection mode).
+    if (injectionLevel === 'full') {
+      const systemMemory = this.context.config.getSystemInstructionMemory();
+      if (systemMemory) {
+        finalPrompt += `\n\n${renderUserMemory(systemMemory)}`;
+      }
     }
 
     // Append environment context (CWD and folder structure).
@@ -1404,7 +1418,7 @@ export class LocalAgentExecutor<TOutput extends z.ZodTypeAny> {
     }
 
     const approvalMode = this.context.config.getApprovalMode();
-    if (approvalMode === ApprovalMode.PLAN) {
+    if (approvalMode === ApprovalMode.PLAN && injectionLevel === 'full') {
       const plansDir = this.context.config.storage.getPlansDir();
       finalPrompt += `\n\n# Execution Constraints\nYou are currently operating in Plan Mode. Your write tools are globally restricted to only modifying plan (.md) files in the plans directory: ${plansDir}/. Do not attempt to modify source code directly.`;
     }

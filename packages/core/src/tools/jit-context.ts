@@ -21,6 +21,11 @@ export async function discoverJitContext(
   config: Config,
   accessedPath: string,
 ): Promise<string> {
+  // [a2a-server-patch] Only discover JIT context in full prompt injection mode
+  if ((config.getPromptInjectionLevel?.() ?? 'full') !== 'full') {
+    return '';
+  }
+
   const memoryContextManager = config.getMemoryContextManager();
   if (!memoryContextManager) {
     return '';
