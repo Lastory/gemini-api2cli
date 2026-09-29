@@ -178,6 +178,12 @@ export function buildAcpChildEnv(
   // This allows them to correctly receive and handle SIGTERM when `AcpWorker.shutdown()` is called.
   env['GEMINI_CLI_NO_RELAUNCH'] = 'true';
 
+  // Mark the isolated temporary workspace as trusted by default to prevent benign
+  // "Skipping project agents due to untrusted folder" warnings from cluttering stderr.
+  if (!env['GEMINI_CLI_TRUST_WORKSPACE']) {
+    env['GEMINI_CLI_TRUST_WORKSPACE'] = 'true';
+  }
+
   env['GEMINI_CLI_HOME'] = isolatedHomeDir;
   env['HOME'] = isolatedHomeDir;
   env['USERPROFILE'] = isolatedHomeDir;
@@ -445,7 +451,13 @@ export class AcpWorker {
           sliceFrom > 0 ? sliceFrom + 1 : overflow,
         );
       }
-      logger.error(`[ACP][stderr] ${text.trim()}`);
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      if (this._state === 'dead') {
+        logger.debug(`[ACP][stderr] ${trimmed}`);
+      } else {
+        logger.error(`[ACP][stderr] ${trimmed}`);
+      }
     });
 
     // Detect crash

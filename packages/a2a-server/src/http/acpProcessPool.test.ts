@@ -15,6 +15,7 @@ import {
   AcpProcessPool,
   cleanStaleAcpTempDirs,
   shutdownAllAcpPools,
+  buildAcpChildEnv,
 } from './acpProcessPool.js';
 
 describe('acpProcessPool cleanup & lifecycle', () => {
@@ -125,6 +126,40 @@ describe('acpProcessPool cleanup & lifecycle', () => {
       await shutdownAllAcpPools();
 
       expect(destroyAllSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('buildAcpChildEnv', () => {
+    const defaultSettings = {
+      idleTimeoutMs: 0,
+      mcpEnabled: false,
+      extensionsEnabled: false,
+      skillsEnabled: false,
+      proxyUrl: '',
+      maxWorkers: 1,
+      failoverWorkers: 0,
+    };
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('defaults GEMINI_CLI_TRUST_WORKSPACE to true when unset', () => {
+      vi.stubEnv('GEMINI_CLI_TRUST_WORKSPACE', '');
+      const env = buildAcpChildEnv('/fake/home', defaultSettings);
+      expect(env['GEMINI_CLI_TRUST_WORKSPACE']).toBe('true');
+    });
+
+    it('respects explicitly configured GEMINI_CLI_TRUST_WORKSPACE=false', () => {
+      vi.stubEnv('GEMINI_CLI_TRUST_WORKSPACE', 'false');
+      const env = buildAcpChildEnv('/fake/home', defaultSettings);
+      expect(env['GEMINI_CLI_TRUST_WORKSPACE']).toBe('false');
+    });
+
+    it('respects explicitly configured GEMINI_CLI_TRUST_WORKSPACE=true', () => {
+      vi.stubEnv('GEMINI_CLI_TRUST_WORKSPACE', 'true');
+      const env = buildAcpChildEnv('/fake/home', defaultSettings);
+      expect(env['GEMINI_CLI_TRUST_WORKSPACE']).toBe('true');
     });
   });
 });
