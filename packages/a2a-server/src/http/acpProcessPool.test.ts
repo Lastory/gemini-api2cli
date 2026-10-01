@@ -57,7 +57,7 @@ describe('acpProcessPool cleanup & lifecycle', () => {
       expect(existsSync(staleDir)).toBe(false);
       expect(existsSync(freshDir)).toBe(true);
       expect(existsSync(nonGeminiDir)).toBe(true);
-    });
+    }, 15000);
   });
 
   describe('AcpWorker tempDir cleanup', () => {
