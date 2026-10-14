@@ -575,11 +575,17 @@ a{color:var(--accent);text-decoration:none}
       <div class="card-title" id="t-req-settings">Request Settings</div>
       <div class="card-desc" id="t-req-settings-desc">Configure credential rotation and error retry behavior.</div>
       <div class="stack" style="gap:12px">
-        <label class="toggle-row">
-          <input type="checkbox" id="rotation-toggle"/>
-          <span id="t-rotation-label">Credential Rotation</span>
-          <span class="toggle-hint" id="t-rotation-hint">Round-robin across all credentials per request</span>
-        </label>
+        <div class="field" id="rotation-mode-row">
+          <span class="label" id="t-rotation-label">Credential Rotation</span>
+          <div class="row" style="gap:8px;align-items:center">
+            <select id="rotation-mode-select" class="select" style="min-width:200px">
+              <option value="none" id="t-rotation-none">None (Single Credential)</option>
+              <option value="elastic" id="t-rotation-elastic">Elastic (Reuse Idle)</option>
+              <option value="strict" id="t-rotation-strict">Strict (Round-Robin)</option>
+            </select>
+          </div>
+          <div class="toggle-hint" id="t-rotation-hint" style="margin-top:4px"></div>
+        </div>
         <label class="toggle-row">
           <input type="checkbox" id="retry-toggle"/>
           <span id="t-retry-label">Auto Retry on Error</span>
@@ -895,7 +901,12 @@ const I = {
     reqSettings: 'Request Settings',
     reqSettingsDesc: 'Configure credential rotation and error retry behavior.',
     rotationLabel: 'Credential Rotation',
-    rotationHint: 'Round-robin across all credentials per request',
+    rotationModeNone: 'None (Single Credential)',
+    rotationModeElastic: 'Elastic (Reuse Idle Workers)',
+    rotationModeStrict: 'Strict (Round-Robin Per Request)',
+    rotationHintNone: 'Rotation disabled: all requests use the currently active credential.',
+    rotationHintElastic: 'Elastic scaling: reuses idle workers to avoid cold starts, rotates to next credential when busy.',
+    rotationHintStrict: 'Strict round-robin: rotates to the next credential on every request.',
     retryLabel: 'Auto Retry on Error',
     retryHint: 'Automatically retry failed requests',
     retryCountLabel: 'Retry Count',
@@ -1156,8 +1167,13 @@ const I = {
     credCooldownQuotaHint: '配额冷却中，将在 Google 提供的重置时间后自动恢复。此凭据的这个模型暂停可用，同凭据的其他模型仍然正常。',
     reqSettings: '请求设置',
     reqSettingsDesc: '配置凭据轮询和错误重试行为。',
-    rotationLabel: '凭据轮询',
-    rotationHint: '每次请求轮流使用不同凭据',
+    rotationLabel: '凭据轮询模式',
+    rotationModeNone: '无（单凭据）',
+    rotationModeElastic: '弹性扩容（优先复用空闲）',
+    rotationModeStrict: '完全轮询（每请求交替）',
+    rotationHintNone: '关闭轮询：所有请求仅使用当前激活的主凭据。',
+    rotationHintElastic: '弹性扩容：优先复用空闲进程避免冷启动，繁忙或打满时轮询启动新凭据。',
+    rotationHintStrict: '完全轮询：每次请求严格按顺序交替使用不同凭据。',
     retryLabel: '错误自动重试',
     retryHint: '请求失败时自动重试',
     retryCountLabel: '重试次数',
@@ -1468,7 +1484,13 @@ function applyLang() {
   $('t-req-settings').textContent = t('reqSettings');
   $('t-req-settings-desc').textContent = t('reqSettingsDesc');
   $('t-rotation-label').textContent = t('rotationLabel');
-  $('t-rotation-hint').textContent = t('rotationHint');
+  const rotNoneEl = $('t-rotation-none');
+  if (rotNoneEl) rotNoneEl.textContent = t('rotationModeNone');
+  const rotElasticEl = $('t-rotation-elastic');
+  if (rotElasticEl) rotElasticEl.textContent = t('rotationModeElastic');
+  const rotStrictEl = $('t-rotation-strict');
+  if (rotStrictEl) rotStrictEl.textContent = t('rotationModeStrict');
+  updateRotationHint();
   $('t-retry-label').textContent = t('retryLabel');
   $('t-retry-hint').textContent = t('retryHint');
   $('t-retry-count-label').textContent = t('retryCountLabel');
@@ -2663,6 +2685,25 @@ $('save-open-api-btn').onclick = async () => {
 };
 
 /* ── Request Settings ── */
+function updateRotationHint() {
+  const selectEl = $('rotation-mode-select');
+  const hintEl = $('t-rotation-hint');
+  if (!selectEl || !hintEl) return;
+  const val = selectEl.value;
+  if (val === 'none') {
+    hintEl.textContent = t('rotationHintNone');
+  } else if (val === 'elastic') {
+    hintEl.textContent = t('rotationHintElastic');
+  } else {
+    hintEl.textContent = t('rotationHintStrict');
+  }
+}
+
+const rotSelectEl = $('rotation-mode-select');
+if (rotSelectEl) {
+  rotSelectEl.onchange = updateRotationHint;
+}
+
 $('retry-toggle').onchange = () => {
   $('retry-count-row').style.display = $('retry-toggle').checked ? '' : 'none';
 };
@@ -2687,7 +2728,8 @@ $('save-settings-btn').onclick = async () => {
     const p = await api('/v1/settings',{
       method:'PUT',
       body:JSON.stringify({
-        rotationEnabled: $('rotation-toggle').checked,
+        rotationMode: $('rotation-mode-select').value,
+        rotationEnabled: $('rotation-mode-select').value !== 'none',
         retryEnabled: $('retry-toggle').checked,
         retryCount: parseInt($('retry-count-select').value, 10),
         timeoutMs: Math.floor(timeoutSec * 1000),
@@ -2713,7 +2755,12 @@ async function loadSettings() {
     const [p, oa] = await Promise.all([api('/v1/settings'), api('/v1/auth/open-api')]);
     const s = p.settings || {};
     S.lastSettings = s;
-    $('rotation-toggle').checked = !!s.rotationEnabled;
+    const rotMode = s.rotationMode || (s.rotationEnabled ? 'strict' : 'none');
+    const rotSelect = $('rotation-mode-select');
+    if (rotSelect) {
+      rotSelect.value = rotMode;
+      updateRotationHint();
+    }
     $('retry-toggle').checked = !!s.retryEnabled;
     $('retry-count-select').value = String(s.retryCount || 3);
     $('retry-count-row').style.display = s.retryEnabled ? '' : 'none';

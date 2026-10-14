@@ -220,7 +220,10 @@ export interface PromptApiDependencies {
 
 class BadRequestError extends Error {}
 
+export type PromptApiRotationMode = 'none' | 'elastic' | 'strict';
+
 type PromptApiSettings = {
+  rotationMode: PromptApiRotationMode;
   rotationEnabled: boolean;
   retryEnabled: boolean;
   retryCount: number;
@@ -338,6 +341,34 @@ function parseBooleanEnv(
   return defaultValue;
 }
 
+function parseRotationModeEnv(
+  modeVal: string | undefined,
+  boolVal: string | undefined,
+  defaultValue: PromptApiRotationMode,
+): PromptApiRotationMode {
+  if (modeVal !== undefined && modeVal.trim() !== '') {
+    const normalized = modeVal.trim().toLowerCase();
+    if (['none', 'off', 'false', '0', 'disabled'].includes(normalized)) {
+      return 'none';
+    }
+    if (['elastic', 'semi-strict', 'semi'].includes(normalized)) {
+      return 'elastic';
+    }
+    if (
+      ['strict', 'round-robin', 'roundrobin', 'full', 'true', '1'].includes(
+        normalized,
+      )
+    ) {
+      return 'strict';
+    }
+  }
+  if (boolVal !== undefined && boolVal.trim() !== '') {
+    const b = parseBooleanEnv(boolVal, true);
+    return b ? 'strict' : 'none';
+  }
+  return defaultValue;
+}
+
 function parseIntegerEnv(
   value: string | undefined,
   defaultValue: number,
@@ -389,18 +420,23 @@ function createPromptApiState(
   credentialStoreRoot: string | undefined,
   acpPool: AcpProcessPool,
 ): PromptApiState {
+  const initialRotationMode = parseRotationModeEnv(
+    process.env['A2A_CONSOLE_ROTATION_MODE'] ??
+      process.env['GEMINI_PROMPT_API_ROTATION_MODE'],
+    process.env['A2A_CONSOLE_ROTATION_ENABLED'] ??
+      process.env['GEMINI_PROMPT_API_ROTATION_ENABLED'] ??
+      process.env['GEMINI_PROMPT_API_ROTATION'],
+    'strict',
+  );
+
   return {
     currentModel: DEFAULT_PROMPT_API_MODEL,
     credentialStore: new PromptCredentialStore(credentialStoreRoot),
     loginJobs: new Map(),
     inputComparisonStore: new InputComparisonStore(),
     settings: {
-      rotationEnabled: parseBooleanEnv(
-        process.env['A2A_CONSOLE_ROTATION_ENABLED'] ??
-          process.env['GEMINI_PROMPT_API_ROTATION_ENABLED'] ??
-          process.env['GEMINI_PROMPT_API_ROTATION'],
-        true,
-      ),
+      rotationMode: initialRotationMode,
+      rotationEnabled: initialRotationMode !== 'none',
       retryEnabled: parseBooleanEnv(
         process.env['A2A_CONSOLE_RETRY_ENABLED'] ??
           process.env['GEMINI_PROMPT_API_RETRY_ENABLED'] ??
@@ -985,40 +1021,6 @@ function normalizeRequestedModel(
   return model;
 }
 
-async function getEffectiveSourceGeminiCliHome(
-  deps: Required<PromptApiDependencies>,
-  state: PromptApiState,
-): Promise<string> {
-  // Rotation mode: cycle through all enabled credentials
-  if (state.settings.rotationEnabled) {
-    const allCredentials = await state.credentialStore.listCredentials();
-    const credentials = allCredentials.filter((c) => !c.disabled);
-    if (credentials.length > 0) {
-      const idx = state.rotationIndex % credentials.length;
-      state.rotationIndex = idx + 1;
-      const credential = credentials[idx];
-      logger.info(
-        `[Prompt API] Rotation: using credential "${credential.label}" (${credential.id})`,
-      );
-      return state.credentialStore.getCredentialHomeDir(credential.id);
-    }
-  }
-
-  const currentCredentialId =
-    await state.credentialStore.getCurrentCredentialId();
-  if (!currentCredentialId) {
-    return deps.sourceGeminiCliHome;
-  }
-
-  const credential =
-    await state.credentialStore.getCredential(currentCredentialId);
-  if (!credential || credential.disabled) {
-    return deps.sourceGeminiCliHome;
-  }
-
-  return state.credentialStore.getCredentialHomeDir(credential.id);
-}
-
 function normalizeCredentialLoginBody(body: unknown): {
   credentialId?: string;
   label?: string;
@@ -1420,10 +1422,11 @@ async function getEffectiveCredentialIdAndHome(
 ): Promise<{ credentialId: string; homeDir: string }> {
   pruneCredentialCooldowns(state);
 
-  // Rotation mode: cycle through all credentials, skipping cooled-down ones
-  if (state.settings.rotationEnabled) {
-    // Semi-strict round-robin: prefer existing healthy idle workers to avoid cold starts
-    // or constant credential switching when the pool has enough capacity.
+  const mode = state.settings.rotationMode;
+
+  // Elastic mode: prefer existing healthy idle workers to avoid cold starts
+  // or constant credential switching when the pool has enough capacity.
+  if (mode === 'elastic') {
     const idleWorker = state.acpPool.getAnyIdleWorker();
     if (
       idleWorker &&
@@ -1434,7 +1437,7 @@ async function getEffectiveCredentialIdAndHome(
       );
       if (idleCred && !idleCred.disabled) {
         logger.info(
-          `[Prompt API] Rotation: Semi-strict reuse of idle worker for credential "${idleWorker.credentialId}"`,
+          `[Prompt API] Rotation (elastic): Semi-strict reuse of idle worker for credential "${idleWorker.credentialId}"`,
         );
         const homeDir = state.credentialStore.getCredentialHomeDir(
           idleWorker.credentialId,
@@ -1442,7 +1445,10 @@ async function getEffectiveCredentialIdAndHome(
         return { credentialId: idleWorker.credentialId, homeDir };
       }
     }
+  }
 
+  // Rotation mode: cycle through all credentials, skipping cooled-down ones
+  if (mode === 'elastic' || mode === 'strict') {
     const allCredentials = await state.credentialStore.listCredentials();
     const credentials = allCredentials.filter((c) => !c.disabled);
     if (credentials.length > 0) {
@@ -1453,12 +1459,12 @@ async function getEffectiveCredentialIdAndHome(
         const credential = credentials[idx];
         if (hasCredentialWideCooldown(state, credential.id)) {
           logger.info(
-            `[Prompt API] Rotation: skipping cooled-down credential "${credential.label}" (${credential.id})`,
+            `[Prompt API] Rotation (${mode}): skipping cooled-down credential "${credential.label}" (${credential.id})`,
           );
           continue;
         }
         logger.info(
-          `[Prompt API] Rotation: using credential "${credential.label}" (${credential.id})`,
+          `[Prompt API] Rotation (${mode}): using credential "${credential.label}" (${credential.id})`,
         );
         const homeDir = state.credentialStore.getCredentialHomeDir(
           credential.id,
@@ -2913,8 +2919,24 @@ export function createPromptApiRouter(
         throw new BadRequestError('Request body must be a JSON object.');
       }
       const b = req.body;
-      if (b['rotationEnabled'] !== undefined) {
-        state.settings.rotationEnabled = Boolean(b['rotationEnabled']);
+      if (b['rotationMode'] !== undefined) {
+        const rawMode = String(b['rotationMode']).toLowerCase().trim();
+        if (
+          rawMode === 'none' ||
+          rawMode === 'elastic' ||
+          rawMode === 'strict'
+        ) {
+          state.settings.rotationMode = rawMode;
+          state.settings.rotationEnabled = rawMode !== 'none';
+        } else {
+          throw new BadRequestError(
+            '"rotationMode" must be one of: "none", "elastic", "strict".',
+          );
+        }
+      } else if (b['rotationEnabled'] !== undefined) {
+        const enabled = Boolean(b['rotationEnabled']);
+        state.settings.rotationEnabled = enabled;
+        state.settings.rotationMode = enabled ? 'strict' : 'none';
       }
       if (b['retryEnabled'] !== undefined) {
         state.settings.retryEnabled = Boolean(b['retryEnabled']);
@@ -3663,16 +3685,12 @@ export function createPromptApiRouter(
 
   router.post('/v1/acp/sessions', async (req, res) => {
     try {
-      const credentialHomeDir = await getEffectiveSourceGeminiCliHome(
-        deps,
-        state,
-      );
-      const currentCredentialId =
-        await state.credentialStore.getCurrentCredentialId();
-      const credentialId = currentCredentialId ?? 'default';
-      const cred = currentCredentialId
-        ? await state.credentialStore.getCredential(currentCredentialId)
-        : undefined;
+      const { credentialId, homeDir: credentialHomeDir } =
+        await getEffectiveCredentialIdAndHome(deps, state);
+      const cred =
+        credentialId !== 'default'
+          ? await state.credentialStore.getCredential(credentialId)
+          : undefined;
 
       const worker = await state.acpPool.getOrCreate(
         credentialId,

@@ -925,6 +925,165 @@ describe('Prompt API routes', () => {
     expect(usedCredIds).not.toContain('rot-1');
   });
 
+  it('rotates across credentials per request in strict mode even when an idle worker exists', async () => {
+    const workspaceRoot = mkdtempSync(
+      path.join(tmpdir(), 'gemini-prompt-api-workspace-'),
+    );
+    tempDirs.push(workspaceRoot);
+    const credentialStoreRoot = mkdtempSync(
+      path.join(tmpdir(), 'gemini-prompt-api-credentials-'),
+    );
+    tempDirs.push(credentialStoreRoot);
+    const fakeCliEntry = path.join(workspaceRoot, 'fake-cli.js');
+    writeFileSync(fakeCliEntry, 'console.log("ok");');
+
+    const credentialStore = new PromptCredentialStore(credentialStoreRoot);
+    await credentialStore.createCredential('Cred 1', 'rot-strict-1');
+    await credentialStore.createCredential('Cred 2', 'rot-strict-2');
+
+    const mockWorker1 = {
+      credentialId: 'rot-strict-1',
+      createSession: vi.fn().mockResolvedValue('test-session-1'),
+      setSessionModel: vi.fn().mockResolvedValue(undefined),
+      prompt: vi.fn().mockResolvedValue({ stopReason: 'end_turn' }),
+      cancelPrompt: vi.fn(),
+      destroySession: vi.fn(),
+    };
+
+    const mockWorker2 = {
+      credentialId: 'rot-strict-2',
+      createSession: vi.fn().mockResolvedValue('test-session-2'),
+      setSessionModel: vi.fn().mockResolvedValue(undefined),
+      prompt: vi.fn().mockResolvedValue({ stopReason: 'end_turn' }),
+      cancelPrompt: vi.fn(),
+      destroySession: vi.fn(),
+    };
+
+    const mockPool = {
+      getOrCreate: vi
+        .fn()
+        .mockImplementation((credId: string) =>
+          Promise.resolve(
+            credId === 'rot-strict-1' ? mockWorker1 : mockWorker2,
+          ),
+        ),
+      // Idle worker exists for rot-strict-1!
+      getAnyIdleWorker: vi.fn().mockReturnValue({
+        credentialId: 'rot-strict-1',
+        state: 'ready',
+        sessionCount: 0,
+      }),
+      destroy: vi.fn().mockResolvedValue(undefined),
+      destroyAll: vi.fn().mockResolvedValue(undefined),
+      warmUp: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpProcessPool;
+
+    const app = createTestApp({
+      cliEntryPath: fakeCliEntry,
+      spawnProcess: vi.fn(),
+      credentialStoreRoot,
+      timeoutMs: 5000,
+      acpPool: mockPool,
+    });
+
+    // Set rotationMode to strict
+    await request(app).put('/v1/settings').send({ rotationMode: 'strict' });
+
+    // Allow background pre-warm to settle
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    (mockPool.getOrCreate as ReturnType<typeof vi.fn>).mockClear();
+
+    // Request 1
+    const res1 = await request(app)
+      .post('/v1/chat/completions')
+      .send({ messages: [{ role: 'user', content: 'hello 1' }] });
+    expect(res1.status).toBe(200);
+
+    // Request 2
+    const res2 = await request(app)
+      .post('/v1/chat/completions')
+      .send({ messages: [{ role: 'user', content: 'hello 2' }] });
+    expect(res2.status).toBe(200);
+
+    const calls = (mockPool.getOrCreate as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBe(2);
+    expect(calls[0][0]).not.toBe(calls[1][0]);
+    expect(['rot-strict-1', 'rot-strict-2']).toContain(calls[0][0]);
+    expect(['rot-strict-1', 'rot-strict-2']).toContain(calls[1][0]);
+  });
+
+  it('reuses idle worker in elastic mode instead of rotating to next credential', async () => {
+    const workspaceRoot = mkdtempSync(
+      path.join(tmpdir(), 'gemini-prompt-api-workspace-'),
+    );
+    tempDirs.push(workspaceRoot);
+    const credentialStoreRoot = mkdtempSync(
+      path.join(tmpdir(), 'gemini-prompt-api-credentials-'),
+    );
+    tempDirs.push(credentialStoreRoot);
+    const fakeCliEntry = path.join(workspaceRoot, 'fake-cli.js');
+    writeFileSync(fakeCliEntry, 'console.log("ok");');
+
+    const credentialStore = new PromptCredentialStore(credentialStoreRoot);
+    await credentialStore.createCredential('Cred 1', 'rot-elastic-1');
+    await credentialStore.createCredential('Cred 2', 'rot-elastic-2');
+
+    const mockWorker = {
+      credentialId: 'rot-elastic-1',
+      createSession: vi.fn().mockResolvedValue('test-session-elastic'),
+      setSessionModel: vi.fn().mockResolvedValue(undefined),
+      prompt: vi.fn().mockResolvedValue({ stopReason: 'end_turn' }),
+      cancelPrompt: vi.fn(),
+      destroySession: vi.fn(),
+    };
+
+    const mockPool = {
+      getOrCreate: vi.fn().mockResolvedValue(mockWorker),
+      // Idle worker exists for rot-elastic-1
+      getAnyIdleWorker: vi.fn().mockReturnValue({
+        credentialId: 'rot-elastic-1',
+        state: 'ready',
+        sessionCount: 0,
+      }),
+      destroy: vi.fn().mockResolvedValue(undefined),
+      destroyAll: vi.fn().mockResolvedValue(undefined),
+      warmUp: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpProcessPool;
+
+    const app = createTestApp({
+      cliEntryPath: fakeCliEntry,
+      spawnProcess: vi.fn(),
+      credentialStoreRoot,
+      timeoutMs: 5000,
+      acpPool: mockPool,
+    });
+
+    // Set rotationMode to elastic
+    await request(app).put('/v1/settings').send({ rotationMode: 'elastic' });
+
+    // Allow background pre-warm to settle
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    (mockPool.getOrCreate as ReturnType<typeof vi.fn>).mockClear();
+
+    // Request 1
+    const res1 = await request(app)
+      .post('/v1/chat/completions')
+      .send({ messages: [{ role: 'user', content: 'hello 1' }] });
+    expect(res1.status).toBe(200);
+
+    // Request 2
+    const res2 = await request(app)
+      .post('/v1/chat/completions')
+      .send({ messages: [{ role: 'user', content: 'hello 2' }] });
+    expect(res2.status).toBe(200);
+
+    const calls = (mockPool.getOrCreate as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBe(2);
+    // In elastic mode, both requests should reuse rot-elastic-1 since getAnyIdleWorker returned it
+    expect(calls[0][0]).toBe('rot-elastic-1');
+    expect(calls[1][0]).toBe('rot-elastic-1');
+  });
+
   it('deletes an individual ACP worker via DELETE /v1/acp/workers/:credentialId and all workers via DELETE /v1/acp/workers', async () => {
     const workspaceRoot = mkdtempSync(
       path.join(tmpdir(), 'gemini-prompt-api-workspace-'),
@@ -1238,6 +1397,7 @@ describe('Prompt API routes', () => {
 
       const res = await request(app).get('/v1/settings');
       expect(res.status).toBe(200);
+      expect(res.body.settings.rotationMode).toBe('strict');
       expect(res.body.settings.rotationEnabled).toBe(true);
       expect(res.body.settings.retryEnabled).toBe(true);
       expect(res.body.settings.retryCount).toBe(3);
@@ -1257,6 +1417,7 @@ describe('Prompt API routes', () => {
 
       const res = await request(app).get('/v1/settings');
       expect(res.status).toBe(200);
+      expect(res.body.settings.rotationMode).toBe('none');
       expect(res.body.settings.rotationEnabled).toBe(false);
       expect(res.body.settings.retryEnabled).toBe(false);
       expect(res.body.settings.retryCount).toBe(5);
@@ -1334,6 +1495,7 @@ describe('Prompt API routes', () => {
 
       const res = await request(app).get('/v1/settings');
       expect(res.status).toBe(200);
+      expect(res.body.settings.rotationMode).toBe('none');
       expect(res.body.settings.rotationEnabled).toBe(false);
       expect(res.body.settings.retryEnabled).toBe(false);
       expect(res.body.settings.retryCount).toBe(7);
@@ -1367,6 +1529,52 @@ describe('Prompt API routes', () => {
       expect(res.body.settings.retryCount).toBe(6);
       expect(res.body.settings.timeoutMs).toBe(30000);
       expect(res.body.defaultTimeoutMs).toBe(30000);
+    });
+
+    it('applies A2A_CONSOLE_ROTATION_MODE and updates via PUT /v1/settings', async () => {
+      vi.stubEnv('A2A_CONSOLE_ROTATION_MODE', 'elastic');
+
+      const app = createTestApp({
+        workspaceRoot,
+        cliEntryPath: fakeCliEntry,
+        credentialStoreRoot,
+      });
+
+      const res = await request(app).get('/v1/settings');
+      expect(res.status).toBe(200);
+      expect(res.body.settings.rotationMode).toBe('elastic');
+      expect(res.body.settings.rotationEnabled).toBe(true);
+
+      // PUT none
+      const putNone = await request(app)
+        .put('/v1/settings')
+        .send({ rotationMode: 'none' });
+      expect(putNone.status).toBe(200);
+      expect(putNone.body.settings.rotationMode).toBe('none');
+      expect(putNone.body.settings.rotationEnabled).toBe(false);
+
+      // PUT strict
+      const putStrict = await request(app)
+        .put('/v1/settings')
+        .send({ rotationMode: 'strict' });
+      expect(putStrict.status).toBe(200);
+      expect(putStrict.body.settings.rotationMode).toBe('strict');
+      expect(putStrict.body.settings.rotationEnabled).toBe(true);
+
+      // PUT backward-compatible rotationEnabled: false
+      const putLegacy = await request(app)
+        .put('/v1/settings')
+        .send({ rotationEnabled: false });
+      expect(putLegacy.status).toBe(200);
+      expect(putLegacy.body.settings.rotationMode).toBe('none');
+      expect(putLegacy.body.settings.rotationEnabled).toBe(false);
+
+      // PUT invalid mode
+      const putInvalid = await request(app)
+        .put('/v1/settings')
+        .send({ rotationMode: 'unsupported' });
+      expect(putInvalid.status).toBe(400);
+      expect(putInvalid.body.error).toContain('rotationMode');
     });
   });
 
