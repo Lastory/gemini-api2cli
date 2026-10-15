@@ -61,11 +61,85 @@ export function isIntroductoryPromoActive(now: Date = new Date()): boolean {
 }
 
 /**
+ * Check if the given date is before or on the Gemini 4 Argon promotional pricing end date (2026-11-30).
+ */
+export function isArgonPromoActive(now: Date = new Date()): boolean {
+  const promoEnd = new Date('2026-11-30T23:59:59.999Z');
+  return now.getTime() <= promoEnd.getTime();
+}
+
+/**
  * Official Vertex AI Pricing for pure-text and conversational generative models.
  * Rates in USD per 1,000,000 (1M) tokens.
  * Based on: https://cloud.google.com/vertex-ai/generative-ai/pricing
  */
 export const VERTEX_TEXT_MODELS_PRICING: Record<string, TieredModelPricing> = {
+  // ── Gemini 4 Argon (Promotional pricing through Nov 30, 2026) ──
+  'gemini-4-argon': {
+    standard: {
+      base: isArgonPromoActive()
+        ? {
+            inputPricePer1M: 2.0,
+            cachedInputPricePer1M: 0.1,
+            outputPricePer1M: 10.0,
+          }
+        : {
+            inputPricePer1M: 4.0,
+            cachedInputPricePer1M: 0.2,
+            outputPricePer1M: 20.0,
+          },
+    },
+    flex: {
+      base: isArgonPromoActive()
+        ? {
+            inputPricePer1M: 1.0,
+            cachedInputPricePer1M: 0.05,
+            outputPricePer1M: 5.0,
+          }
+        : {
+            inputPricePer1M: 2.0,
+            cachedInputPricePer1M: 0.1,
+            outputPricePer1M: 10.0,
+          },
+    },
+    priority: {
+      base: isArgonPromoActive()
+        ? {
+            inputPricePer1M: 3.6,
+            cachedInputPricePer1M: 0.18,
+            outputPricePer1M: 18.0,
+          }
+        : {
+            inputPricePer1M: 7.2,
+            cachedInputPricePer1M: 0.36,
+            outputPricePer1M: 36.0,
+          },
+    },
+  },
+  'gemini-4-argon-cyber-permissive': {
+    standard: {
+      base: {
+        inputPricePer1M: 4.0,
+        cachedInputPricePer1M: 0.2,
+        outputPricePer1M: 20.0,
+      },
+    },
+    flex: {
+      base: {
+        inputPricePer1M: 2.0,
+        cachedInputPricePer1M: 0.1,
+        outputPricePer1M: 10.0,
+      },
+    },
+    priority: {
+      base: {
+        inputPricePer1M: 7.2,
+        cachedInputPricePer1M: 0.36,
+        outputPricePer1M: 36.0,
+      },
+    },
+  },
+
   // ── Gemini 3 Pro ──
   'gemini-3.1-pro-preview': {
     standard: {
@@ -585,6 +659,9 @@ export const VERTEX_TEXT_MODELS_PRICING: Record<string, TieredModelPricing> = {
  * Model aliases mapped to canonical keys in VERTEX_TEXT_MODELS_PRICING.
  */
 const MODEL_ALIASES: Record<string, string> = {
+  argon: 'gemini-4-argon',
+  'gemini-4': 'gemini-4-argon',
+  'gemini-4-argon-cyber': 'gemini-4-argon-cyber-permissive',
   auto: 'gemini-2.5-pro',
   'auto-gemini-2.5': 'gemini-2.5-pro',
   'auto-gemini-3': 'gemini-3-pro-preview',

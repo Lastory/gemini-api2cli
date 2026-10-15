@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   estimateVertexCost,
+  isArgonPromoActive,
   resolveVertexPricingModel,
   VERTEX_TEXT_MODELS_PRICING,
 } from './vertexPricing.js';
@@ -27,6 +28,11 @@ describe('Vertex AI Pricing & Cost Estimation', () => {
       expect(
         resolveVertexPricingModel('gemini-3.1-pro-preview-customtools'),
       ).toBe('gemini-3.1-pro-preview');
+      expect(resolveVertexPricingModel('argon')).toBe('gemini-4-argon');
+      expect(resolveVertexPricingModel('gemini-4')).toBe('gemini-4-argon');
+      expect(resolveVertexPricingModel('gemini-4-argon-cyber')).toBe(
+        'gemini-4-argon-cyber-permissive',
+      );
     });
 
     it('strips "models/" prefix and trims whitespace', () => {
@@ -35,6 +41,9 @@ describe('Vertex AI Pricing & Cost Estimation', () => {
       );
       expect(resolveVertexPricingModel('models/gemini-3.5-flash')).toBe(
         'gemini-3.5-flash',
+      );
+      expect(resolveVertexPricingModel('models/gemini-4-argon')).toBe(
+        'gemini-4-argon',
       );
     });
 
@@ -218,9 +227,103 @@ describe('Vertex AI Pricing & Cost Estimation', () => {
     });
   });
 
+  describe('estimateVertexCost - Gemini 4 Argon', () => {
+    it('calculates cost for gemini-4-argon under promo pricing with thinking tokens', () => {
+      // 10,000 cached tokens, 40,000 uncached input tokens, 2,000 output + 3,000 thought tokens
+      const usage: UsageInfo = {
+        inputTokens: 50_000,
+        cachedReadTokens: 10_000,
+        outputTokens: 2_000,
+        thoughtTokens: 3_000,
+        totalTokens: 55_000,
+      };
+
+      const result = estimateVertexCost('gemini-4-argon', usage, 'standard');
+
+      // Promo standard rate (through Nov 30, 2026):
+      // cached: 10,000 / 1M * 0.10 = $0.001
+      // uncached input: 40,000 / 1M * 2.0 = $0.080
+      // billable output: (2000 + 3000) / 1M * 10.0 = $0.050
+      // total: 0.001 + 0.080 + 0.050 = $0.131
+      expect(result.cachedCostUsd).toBeCloseTo(0.001, 6);
+      expect(result.inputCostUsd).toBeCloseTo(0.08, 6);
+      expect(result.outputCostUsd).toBeCloseTo(0.05, 6);
+      expect(result.totalCostUsd).toBeCloseTo(0.131, 6);
+    });
+
+    it('calculates cost for gemini-4-argon under Flex tier (0.5x)', () => {
+      const usage: UsageInfo = {
+        inputTokens: 100_000,
+        outputTokens: 100_000,
+        thoughtTokens: 0,
+        totalTokens: 200_000,
+      };
+
+      const result = estimateVertexCost('gemini-4-argon', usage, 'flex');
+      // promo flex: input $1.00, output $5.00
+      // inputCost: 100,000 / 1M * 1.00 = 0.10
+      // outputCost: 100,000 / 1M * 5.00 = 0.50
+      // total: 0.60
+      expect(result.inputCostUsd).toBeCloseTo(0.1, 6);
+      expect(result.outputCostUsd).toBeCloseTo(0.5, 6);
+      expect(result.totalCostUsd).toBeCloseTo(0.6, 6);
+    });
+
+    it('calculates cost for gemini-4-argon under Priority tier (1.8x)', () => {
+      const usage: UsageInfo = {
+        inputTokens: 100_000,
+        outputTokens: 100_000,
+        thoughtTokens: 0,
+        totalTokens: 200_000,
+      };
+
+      const result = estimateVertexCost('gemini-4-argon', usage, 'priority');
+      // promo priority: input $3.60, output $18.00
+      // inputCost: 100,000 / 1M * 3.60 = 0.36
+      // outputCost: 100,000 / 1M * 18.00 = 1.80
+      // total: 2.16
+      expect(result.inputCostUsd).toBeCloseTo(0.36, 6);
+      expect(result.outputCostUsd).toBeCloseTo(1.8, 6);
+      expect(result.totalCostUsd).toBeCloseTo(2.16, 6);
+    });
+
+    it('calculates cost for gemini-4-argon-cyber-permissive without promo discounts', () => {
+      const usage: UsageInfo = {
+        inputTokens: 100_000,
+        cachedReadTokens: 10_000,
+        outputTokens: 100_000,
+        thoughtTokens: 0,
+        totalTokens: 200_000,
+      };
+
+      const result = estimateVertexCost(
+        'gemini-4-argon-cyber-permissive',
+        usage,
+        'standard',
+      );
+      // Cyber permissive standard: input $4.00, cached $0.20, output $20.00
+      // uncached input: 90,000 / 1M * 4.00 = 0.36
+      // cached input: 10,000 / 1M * 0.20 = 0.002
+      // output: 100,000 / 1M * 20.00 = 2.00
+      // total: 2.362
+      expect(result.inputCostUsd).toBeCloseTo(0.36, 6);
+      expect(result.cachedCostUsd).toBeCloseTo(0.002, 6);
+      expect(result.outputCostUsd).toBeCloseTo(2.0, 6);
+      expect(result.totalCostUsd).toBeCloseTo(2.362, 6);
+    });
+
+    it('validates isArgonPromoActive date boundary', () => {
+      expect(isArgonPromoActive(new Date('2026-10-15T00:00:00Z'))).toBe(true);
+      expect(isArgonPromoActive(new Date('2026-11-30T23:59:59Z'))).toBe(true);
+      expect(isArgonPromoActive(new Date('2026-12-01T00:00:00Z'))).toBe(false);
+    });
+  });
+
   describe('Model Coverage', () => {
     it('contains pricing for all required text models', () => {
       const expectedModels = [
+        'gemini-4-argon',
+        'gemini-4-argon-cyber-permissive',
         'gemini-3.1-pro-preview',
         'gemini-3-pro-preview',
         'gemini-3.8-flash',

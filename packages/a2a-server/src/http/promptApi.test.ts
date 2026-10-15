@@ -359,8 +359,26 @@ describe('Prompt API routes', () => {
     });
     expect(Array.isArray(modelsResponse.body.models)).toBe(true);
     expect(modelsResponse.body.models.length).toBeGreaterThan(0);
+    expect(modelsResponse.body.models).toContainEqual(
+      expect.objectContaining({
+        id: 'gemini-4-argon',
+        label: 'Gemini 4 Argon',
+        kind: 'pro',
+      }),
+    );
     expect(Array.isArray(modelsResponse.body.aliases)).toBe(true);
     expect(modelsResponse.body.aliases.length).toBeGreaterThan(0);
+
+    const argonUpdateResponse = await request(app)
+      .put(PROMPT_API_CURRENT_MODEL_ROUTE)
+      .send({ model: 'gemini-4-argon' });
+    expect(argonUpdateResponse.status).toBe(200);
+    expect(argonUpdateResponse.body.currentModel).toMatchObject({
+      id: 'gemini-4-argon',
+      label: 'Gemini 4 Argon',
+      kind: 'pro',
+      known: true,
+    });
 
     const updateResponse = await request(app)
       .put(PROMPT_API_CURRENT_MODEL_ROUTE)

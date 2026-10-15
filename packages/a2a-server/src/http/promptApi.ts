@@ -128,6 +128,12 @@ const PROMPT_API_MODEL_OPTIONS = [
     isPreview: true,
   },
   {
+    id: 'gemini-4-argon',
+    label: 'Gemini 4 Argon',
+    kind: 'pro',
+    isPreview: false,
+  },
+  {
     id: DEFAULT_GEMINI_MODEL,
     label: getDisplayString(DEFAULT_GEMINI_MODEL),
     kind: 'pro',
