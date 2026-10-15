@@ -39,6 +39,7 @@ import {
   type ToolConfirmationRequest,
   resolveAtCommandPath,
   type ResolvedAtCommandPath,
+  tokenLimit,
 } from '@google/gemini-cli-core';
 import * as acp from '@agentclientprotocol/sdk';
 import type {
@@ -193,12 +194,19 @@ export class Session {
     }
   };
 
-  dispose(): void {
+  async dispose(): Promise<void> {
     coreEvents.off(
       CoreEvent.ApprovalModeChanged,
       this.handleApprovalModeChanged,
     );
     this.disposeController.abort();
+    if (this.context.config?.dispose) {
+      try {
+        await this.context.config.dispose();
+      } catch (err) {
+        debugLogger.error(`Error disposing config: ${err}`);
+      }
+    }
   }
 
   async cancelPendingPrompt(): Promise<void> {
@@ -373,6 +381,11 @@ export class Session {
       if (handled) {
         return {
           stopReason: 'end_turn',
+          usage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+          },
           _meta: {
             quota: {
               token_count: { input_tokens: 0, output_tokens: 0 },
@@ -392,12 +405,36 @@ export class Session {
     let lastUsageMetadata: GenerateContentResponseUsageMetadata | undefined;
     const modelUsageMap = new Map<string, { input: number; output: number }>();
 
-    const buildAcpUsage = (): acp.Usage => ({
-      inputTokens: totalInputTokens,
-      outputTokens: totalOutputTokens,
-      totalTokens: totalTokens || totalInputTokens + totalOutputTokens,
-      cachedReadTokens: totalCachedTokens > 0 ? totalCachedTokens : undefined,
-      thoughtTokens: totalThoughtTokens > 0 ? totalThoughtTokens : undefined,
+    const buildPromptResponse = (
+      stopReason: acp.StopReason,
+    ): acp.PromptResponse => ({
+      stopReason,
+      usage: {
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+        cachedReadTokens: totalCachedTokens || undefined,
+        thoughtTokens: totalThoughtTokens || undefined,
+        totalTokens: totalTokens || totalInputTokens + totalOutputTokens,
+      },
+      _meta: {
+        quota: {
+          token_count: {
+            input_tokens: totalInputTokens,
+            output_tokens: totalOutputTokens,
+            cached_tokens: totalCachedTokens,
+          },
+          model_usage: Array.from(modelUsageMap.entries()).map(
+            ([modelName, counts]) => ({
+              model: modelName,
+              token_count: {
+                input_tokens: counts.input,
+                output_tokens: counts.output,
+              },
+            }),
+          ),
+        },
+        usageMetadata: lastUsageMetadata,
+      },
     });
     // [a2a-server-patch] END: Extended token metrics (cached, thought, total) and ACP usage builder
 
@@ -408,29 +445,7 @@ export class Session {
     while (true) {
       turnCount++;
       if (maxTurns >= 0 && turnCount > maxTurns) {
-        return {
-          stopReason: 'max_turn_requests',
-          usage: buildAcpUsage(),
-          _meta: {
-            quota: {
-              token_count: {
-                input_tokens: totalInputTokens,
-                output_tokens: totalOutputTokens,
-                cached_tokens: totalCachedTokens,
-              },
-              model_usage: Array.from(modelUsageMap.entries()).map(
-                ([modelName, counts]) => ({
-                  model: modelName,
-                  token_count: {
-                    input_tokens: counts.input,
-                    output_tokens: counts.output,
-                  },
-                }),
-              ),
-            },
-            usageMetadata: lastUsageMetadata,
-          },
-        };
+        return buildPromptResponse('max_turn_requests');
       }
 
       if (pendingSend.signal.aborted) {
@@ -509,6 +524,14 @@ export class Session {
                   }
                 }
                 // [a2a-server-patch] END: Extract cached tokens, thoughts tokens and usageMetadata
+
+                await this.sendUpdate({
+                  sessionUpdate: 'usage_update',
+                  used: turnInputTokens + turnOutputTokens,
+                  size: tokenLimit(
+                    turnModelId || this.context.config.getModel(),
+                  ),
+                });
               }
               break;
             }
@@ -581,29 +604,7 @@ export class Session {
         ) {
           // The stream ended with an empty response or malformed tool call.
           // Treat this as a graceful end to the model's turn rather than a crash.
-          return {
-            stopReason: 'end_turn',
-            usage: buildAcpUsage(),
-            _meta: {
-              quota: {
-                token_count: {
-                  input_tokens: totalInputTokens,
-                  output_tokens: totalOutputTokens,
-                  cached_tokens: totalCachedTokens,
-                },
-                model_usage: Array.from(modelUsageMap.entries()).map(
-                  ([modelName, counts]) => ({
-                    model: modelName,
-                    token_count: {
-                      input_tokens: counts.input,
-                      output_tokens: counts.output,
-                    },
-                  }),
-                ),
-              },
-              usageMetadata: lastUsageMetadata,
-            },
-          };
+          return buildPromptResponse('end_turn');
         }
 
         throw new acp.RequestError(
@@ -631,29 +632,7 @@ export class Session {
       }
 
       if (stopReason !== 'end_turn') {
-        return {
-          stopReason,
-          usage: buildAcpUsage(),
-          _meta: {
-            quota: {
-              token_count: {
-                input_tokens: totalInputTokens,
-                output_tokens: totalOutputTokens,
-                cached_tokens: totalCachedTokens,
-              },
-              model_usage: Array.from(modelUsageMap.entries()).map(
-                ([modelName, counts]) => ({
-                  model: modelName,
-                  token_count: {
-                    input_tokens: counts.input,
-                    output_tokens: counts.output,
-                  },
-                }),
-              ),
-            },
-            usageMetadata: lastUsageMetadata,
-          },
-        };
+        return buildPromptResponse(stopReason);
       }
 
       if (toolCallRequests.length === 0) {
@@ -675,31 +654,7 @@ export class Session {
       currentParts = toolResponseParts;
     }
 
-    const modelUsageArray = Array.from(modelUsageMap.entries()).map(
-      ([modelName, counts]) => ({
-        model: modelName,
-        token_count: {
-          input_tokens: counts.input,
-          output_tokens: counts.output,
-        },
-      }),
-    );
-
-    return {
-      stopReason: 'end_turn',
-      usage: buildAcpUsage(),
-      _meta: {
-        quota: {
-          token_count: {
-            input_tokens: totalInputTokens,
-            output_tokens: totalOutputTokens,
-            cached_tokens: totalCachedTokens,
-          },
-          model_usage: modelUsageArray,
-        },
-        usageMetadata: lastUsageMetadata,
-      },
-    };
+    return buildPromptResponse('end_turn');
   }
 
   private async handleCommand(
