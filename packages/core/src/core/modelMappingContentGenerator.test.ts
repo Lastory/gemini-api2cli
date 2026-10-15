@@ -132,4 +132,142 @@ describe('ModelMappingContentGenerator', () => {
       LlmRole.MAIN,
     );
   });
+
+  // [a2a-server-patch] BEGIN: Tests for Vertex AI model path qualification
+  describe('Vertex AI model path qualification', () => {
+    it('qualifies bare model name with projects and locations', async () => {
+      const mockWrapped = {
+        generateContentStream: vi.fn().mockResolvedValue({}),
+      } as unknown as ContentGenerator;
+
+      const generator = new ModelMappingContentGenerator(
+        mockWrapped,
+        {},
+        {
+          isVertexAI: true,
+          project: 'xenodochial-watch-8phrv',
+          location: 'global',
+        },
+      );
+
+      const req = { model: 'gemini-4-argon', contents: [] };
+      await generator.generateContentStream(req, 'prompt-id', LlmRole.MAIN);
+
+      expect(mockWrapped.generateContentStream).toHaveBeenCalledWith(
+        {
+          model:
+            'projects/xenodochial-watch-8phrv/locations/global/publishers/google/models/gemini-4-argon',
+          contents: [],
+        },
+        'prompt-id',
+        LlmRole.MAIN,
+      );
+    });
+
+    it('strips existing models/ or publishers/google/models/ prefix before qualifying', async () => {
+      const mockWrapped = {
+        generateContent: vi.fn().mockResolvedValue({}),
+      } as unknown as ContentGenerator;
+
+      const generator = new ModelMappingContentGenerator(
+        mockWrapped,
+        {},
+        {
+          isVertexAI: true,
+          project: 'my-project',
+          location: 'us-central1',
+        },
+      );
+
+      await generator.generateContent(
+        { model: 'models/gemini-2.5-flash', contents: [] },
+        'prompt-id',
+        LlmRole.MAIN,
+      );
+      expect(mockWrapped.generateContent).toHaveBeenCalledWith(
+        {
+          model:
+            'projects/my-project/locations/us-central1/publishers/google/models/gemini-2.5-flash',
+          contents: [],
+        },
+        'prompt-id',
+        LlmRole.MAIN,
+      );
+
+      await generator.generateContent(
+        {
+          model: 'publishers/google/models/gemini-2.5-pro',
+          contents: [],
+        },
+        'prompt-id',
+        LlmRole.MAIN,
+      );
+      expect(mockWrapped.generateContent).toHaveBeenCalledWith(
+        {
+          model:
+            'projects/my-project/locations/us-central1/publishers/google/models/gemini-2.5-pro',
+          contents: [],
+        },
+        'prompt-id',
+        LlmRole.MAIN,
+      );
+    });
+
+    it('preserves already fully qualified projects/... model string', async () => {
+      const mockWrapped = {
+        generateContent: vi.fn().mockResolvedValue({}),
+      } as unknown as ContentGenerator;
+
+      const generator = new ModelMappingContentGenerator(
+        mockWrapped,
+        {},
+        {
+          isVertexAI: true,
+          project: 'my-project',
+          location: 'global',
+        },
+      );
+
+      const alreadyQualified =
+        'projects/other-proj/locations/us/publishers/google/models/gemini-custom';
+      await generator.generateContent(
+        { model: alreadyQualified, contents: [] },
+        'prompt-id',
+        LlmRole.MAIN,
+      );
+      expect(mockWrapped.generateContent).toHaveBeenCalledWith(
+        { model: alreadyQualified, contents: [] },
+        'prompt-id',
+        LlmRole.MAIN,
+      );
+    });
+
+    it('does not qualify model if isVertexAI is false', async () => {
+      const mockWrapped = {
+        generateContent: vi.fn().mockResolvedValue({}),
+      } as unknown as ContentGenerator;
+
+      const generator = new ModelMappingContentGenerator(
+        mockWrapped,
+        {},
+        {
+          isVertexAI: false,
+          project: 'my-project',
+          location: 'global',
+        },
+      );
+
+      await generator.generateContent(
+        { model: 'gemini-2.5-flash', contents: [] },
+        'prompt-id',
+        LlmRole.MAIN,
+      );
+      expect(mockWrapped.generateContent).toHaveBeenCalledWith(
+        { model: 'gemini-2.5-flash', contents: [] },
+        'prompt-id',
+        LlmRole.MAIN,
+      );
+    });
+  });
+  // [a2a-server-patch] END: Tests for Vertex AI model path qualification
 });

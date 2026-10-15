@@ -652,6 +652,105 @@ describe('createContentGenerator', () => {
     }
   });
   // [a2a-server-patch] END: Tests for Vertex AI routing and timeout injection
+
+  // [a2a-server-patch] BEGIN: Tests for Vertex AI location resolution and qualification
+  it('should use global endpoint for Vertex AI when location is global and no baseUrl is provided', async () => {
+    vi.stubEnv('GOOGLE_CLOUD_LOCATION', 'global');
+
+    const mockGenerator = {
+      models: {},
+    } as unknown as GoogleGenAI;
+    vi.mocked(GoogleGenAI).mockImplementation(() => mockGenerator as never);
+
+    await createContentGenerator(
+      {
+        apiKey: 'test-api-key',
+        vertexai: true,
+        authType: AuthType.USE_VERTEX_AI,
+        location: 'global',
+      },
+      mockConfig,
+    );
+
+    expect(GoogleGenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpOptions: expect.objectContaining({
+          baseUrl: 'https://aiplatform.googleapis.com',
+        }),
+      }),
+    );
+  });
+
+  it('should use regional endpoint for Vertex AI when location is a specific region and no baseUrl is provided', async () => {
+    vi.stubEnv('GOOGLE_CLOUD_LOCATION', 'asia-east1');
+
+    const mockGenerator = {
+      models: {},
+    } as unknown as GoogleGenAI;
+    vi.mocked(GoogleGenAI).mockImplementation(() => mockGenerator as never);
+
+    await createContentGenerator(
+      {
+        apiKey: 'test-api-key',
+        vertexai: true,
+        authType: AuthType.USE_VERTEX_AI,
+        location: 'asia-east1',
+      },
+      mockConfig,
+    );
+
+    expect(GoogleGenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpOptions: expect.objectContaining({
+          baseUrl: 'https://asia-east1-aiplatform.googleapis.com',
+        }),
+      }),
+    );
+  });
+
+  it('should prioritize explicit baseUrl over location-derived baseUrl in Vertex AI', async () => {
+    vi.stubEnv('GOOGLE_CLOUD_LOCATION', 'asia-east1');
+
+    const mockGenerator = {
+      models: {},
+    } as unknown as GoogleGenAI;
+    vi.mocked(GoogleGenAI).mockImplementation(() => mockGenerator as never);
+
+    await createContentGenerator(
+      {
+        apiKey: 'test-api-key',
+        vertexai: true,
+        authType: AuthType.USE_VERTEX_AI,
+        baseUrl: 'https://custom-vertex.example.com',
+        location: 'asia-east1',
+      },
+      mockConfig,
+    );
+
+    expect(GoogleGenAI).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpOptions: expect.objectContaining({
+          baseUrl: 'https://custom-vertex.example.com',
+        }),
+      }),
+    );
+  });
+
+  it('should retain project and location in createContentGeneratorConfig for Vertex AI', async () => {
+    vi.stubEnv('GOOGLE_CLOUD_PROJECT', 'my-gcp-project');
+    vi.stubEnv('GOOGLE_CLOUD_LOCATION', 'global');
+    vi.stubEnv('GOOGLE_API_KEY', 'my-vtx-api-key');
+
+    const cfg = await createContentGeneratorConfig(
+      mockConfig,
+      AuthType.USE_VERTEX_AI,
+    );
+
+    expect(cfg.project).toBe('my-gcp-project');
+    expect(cfg.location).toBe('global');
+    expect(cfg.vertexai).toBe(true);
+  });
+  // [a2a-server-patch] END: Tests for Vertex AI location resolution and qualification
   it('should inject HttpsProxyAgent into googleAuthOptions when proxy URL uses https://', async () => {
     const mockConfigWithProxy = {
       getModel: vi.fn().mockReturnValue('gemini-pro'),

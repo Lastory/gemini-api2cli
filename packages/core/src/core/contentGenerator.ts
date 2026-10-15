@@ -109,6 +109,9 @@ export type ContentGeneratorConfig = {
   vertexAiRouting?: VertexAiRoutingConfig;
   // [a2a-server-patch] Request timeout in milliseconds
   timeout?: number;
+  // [a2a-server-patch] Track project and location for Vertex AI resource names
+  project?: string;
+  location?: string;
 };
 
 export type VertexAiRequestType = 'dedicated' | 'shared';
@@ -229,6 +232,10 @@ export async function createContentGeneratorConfig(
   ) {
     contentGeneratorConfig.apiKey = googleApiKey;
     contentGeneratorConfig.vertexai = true;
+    // [a2a-server-patch] BEGIN: Retain Vertex AI project and location
+    contentGeneratorConfig.project = googleCloudProject;
+    contentGeneratorConfig.location = googleCloudLocation;
+    // [a2a-server-patch] END: Retain Vertex AI project and location
 
     return contentGeneratorConfig;
   }
@@ -410,12 +417,19 @@ export async function createContentGenerator(
           validateBaseUrl(envBaseUrl);
           baseUrl = envBaseUrl;
         } else if (config.authType === AuthType.USE_VERTEX_AI) {
-          const location = process.env['GOOGLE_CLOUD_LOCATION'];
+          // [a2a-server-patch] BEGIN: Resolve regional/global Vertex AI baseUrl from location
+          const location =
+            config.location ?? process.env['GOOGLE_CLOUD_LOCATION'];
           if (location === 'us') {
             baseUrl = VERTEX_AI_US_REP_ENDPOINT;
           } else if (location === 'eu') {
             baseUrl = VERTEX_AI_EU_REP_ENDPOINT;
+          } else if (location === 'global') {
+            baseUrl = 'https://aiplatform.googleapis.com';
+          } else if (location) {
+            baseUrl = `https://${location}-aiplatform.googleapis.com`;
           }
+          // [a2a-server-patch] END: Resolve regional/global Vertex AI baseUrl from location
         }
       } else {
         validateBaseUrl(baseUrl);
@@ -470,9 +484,23 @@ export async function createContentGenerator(
           },
         }),
       });
+      // [a2a-server-patch] Pass Vertex AI model context for proper resource path formatting
+      const vertexContext = useVertex
+        ? {
+            isVertexAI: true,
+            project:
+              config.project ??
+              process.env['GOOGLE_CLOUD_PROJECT'] ??
+              process.env['GOOGLE_CLOUD_PROJECT_ID'],
+            location: config.location ?? process.env['GOOGLE_CLOUD_LOCATION'],
+          }
+        : undefined;
+
       return new LoggingContentGenerator(
-        new ModelMappingContentGenerator(googleGenAI.models, () =>
-          getBackendModelMappings(gcConfig, false),
+        new ModelMappingContentGenerator(
+          googleGenAI.models,
+          () => getBackendModelMappings(gcConfig, false),
+          vertexContext,
         ),
         gcConfig,
       );
