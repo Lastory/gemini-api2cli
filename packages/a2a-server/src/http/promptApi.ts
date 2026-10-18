@@ -2363,8 +2363,6 @@ async function handleAcpJsonRequest(
             ) {
               assistantText += update.update.content.text;
             }
-
-            logger.info(`[ACP] chunk: ${JSON.stringify(update)}\n`);
           },
           promptMeta,
         );
