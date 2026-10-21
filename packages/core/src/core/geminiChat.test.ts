@@ -2350,7 +2350,7 @@ describe('GeminiChat', () => {
             },
           ],
           config: {
-            systemInstruction: '',
+            systemInstruction: undefined,
             tools: [],
             temperature: 0,
             thinkingConfig: {

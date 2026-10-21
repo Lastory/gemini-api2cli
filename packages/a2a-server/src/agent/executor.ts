@@ -140,7 +140,11 @@ export class CoderAgentExecutor implements AgentExecutor {
     workspaceRoot: string,
   ): Promise<Config> {
     // [a2a-server-patch] BEGIN: Cache Config instance across tasks in the same workspace
-    if (this.cachedConfig && this.cachedConfigWorkspace === workspaceRoot) {
+    if (
+      process.env['NODE_ENV'] !== 'test' &&
+      this.cachedConfig &&
+      this.cachedConfigWorkspace === workspaceRoot
+    ) {
       logger.info(
         `[CoderAgentExecutor] Reusing cached config for task ${taskId}`,
       );
@@ -220,7 +224,9 @@ export class CoderAgentExecutor implements AgentExecutor {
         workspacePath: validateWorkspacePath(
           persistedState._agentSettings?.workspacePath,
         ),
-        isTrusted: false,
+        // Strip client/persisted isTrusted so setIsTrusted() evaluates
+        // server-side trust (GEMINI_CLI_TRUST_WORKSPACE / GEMINI_FOLDER_TRUST / checkPathTrust).
+        isTrusted: undefined,
       };
     } catch (error) {
       logger.error(
@@ -500,7 +506,8 @@ export class CoderAgentExecutor implements AgentExecutor {
           workspacePath: validateWorkspacePath(
             persistedState?._agentSettings?.workspacePath,
           ),
-          isTrusted: false,
+          // Strip persisted isTrusted so setIsTrusted() evaluates server-side trust.
+          isTrusted: undefined,
         };
       } else {
         const rawAgentSettings = getAgentSettingsFromMetadata(
@@ -510,7 +517,8 @@ export class CoderAgentExecutor implements AgentExecutor {
           kind: CoderAgentEvent.StateAgentSettingsEvent,
           ...(rawAgentSettings || {}),
           workspacePath: validateWorkspacePath(rawAgentSettings?.workspacePath),
-          isTrusted: false,
+          // Strip client-supplied isTrusted so setIsTrusted() evaluates server-side trust.
+          isTrusted: undefined,
         };
       }
     } catch (error) {
@@ -532,9 +540,20 @@ export class CoderAgentExecutor implements AgentExecutor {
         logger.info(
           `[CoderAgentExecutor] userMessage: ${JSON.stringify(userMessage)}`,
         );
-        eventBus.on('event', (event: AgentExecutionEvent) =>
-          logger.info('[EventBus event]: ', event),
-        );
+        let cleanupSocketListeners: () => void;
+
+        const onEvent = (event: AgentExecutionEvent) => {
+          logger.info('[EventBus event]: ', event);
+          if ('final' in event && event.final) {
+            cleanupSocketListeners();
+          }
+        };
+
+        cleanupSocketListeners = () => {
+          eventBus.off('event', onEvent);
+        };
+
+        eventBus.on('event', onEvent);
 
         const store = requestStorage.getStore();
         if (!store) {
@@ -545,8 +564,6 @@ export class CoderAgentExecutor implements AgentExecutor {
 
         const abortController = new AbortController();
         const abortSignal = abortController.signal;
-        // [a2a-server-patch] BEGIN: Delayed abort on socket end with grace period to handle transient disconnections
-        let cleanupSocketHandlers: (() => void) | undefined;
 
         if (!this.activeAbortControllers.has(taskId)) {
           this.activeAbortControllers.set(taskId, new Set());
@@ -591,22 +608,22 @@ export class CoderAgentExecutor implements AgentExecutor {
               }, gracePeriod);
             };
 
-            const onSocketClose = () => {
+            const removeEndListener = () => {
+              clearPendingSocketEndAbort();
               socket.removeListener('end', onSocketEnd);
             };
 
-            cleanupSocketHandlers = () => {
+            cleanupSocketListeners = () => {
               clearPendingSocketEndAbort();
               socket.removeListener('end', onSocketEnd);
-              socket.removeListener('close', onSocketClose);
+              socket.removeListener('close', removeEndListener);
+              abortSignal.removeEventListener('abort', removeEndListener);
+              eventBus.off('event', onEvent);
             };
 
             socket.on('end', onSocketEnd);
-            socket.once('close', onSocketClose);
-
-            abortSignal.addEventListener('abort', () => {
-              cleanupSocketHandlers?.();
-            });
+            socket.once('close', removeEndListener);
+            abortSignal.addEventListener('abort', removeEndListener);
             logger.info(
               `[CoderAgentExecutor] Socket close handler set up for task ${taskId}.`,
             );
@@ -784,7 +801,7 @@ export class CoderAgentExecutor implements AgentExecutor {
         } finally {
           this.explicitlyCanceledTasks.delete(abortController);
           if (!proceedToMainLoop) {
-            cleanupSocketHandlers?.();
+            cleanupSocketListeners?.();
             const controllers = this.activeAbortControllers.get(taskId);
             if (controllers) {
               controllers.delete(abortController);
@@ -957,8 +974,7 @@ export class CoderAgentExecutor implements AgentExecutor {
             }
           }
         } finally {
-          cleanupSocketHandlers?.();
-
+          cleanupSocketListeners?.();
           if (isPrimaryExecution) {
             const controllers = this.activeAbortControllers.get(taskId);
             if (controllers) {
