@@ -4,17 +4,25 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type {
   SerializableConfirmationDetails,
   ToolEditConfirmationDetails,
 } from '@google/gemini-cli-core';
+import { setStringWidthFunction } from 'ink';
 import {
   escapeAnsiCtrlCodes,
   stripUnsafeCharacters,
   getCachedStringWidth,
   sanitizeForDisplay,
+  setAmbiguousCharactersWide,
+  areAmbiguousCharactersWide,
 } from './textUtils.js';
+
+vi.mock('ink', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('ink')>();
+  return { ...actual, setStringWidthFunction: vi.fn() };
+});
 
 describe('textUtils', () => {
   describe('sanitizeForListDisplay', () => {
@@ -56,6 +64,113 @@ describe('textUtils', () => {
       const charWithAnsi = '\u001b[31m' + '؂' + '\u001b[0m';
       expect(() => getCachedStringWidth(charWithAnsi)).not.toThrow();
       expect(typeof getCachedStringWidth(charWithAnsi)).toBe('number');
+    });
+
+    it('should count Thai SARA AM (U+0E33) as 1 column when standalone or combined', () => {
+      expect(getCachedStringWidth('\u0E33')).toBe(1);
+      expect(getCachedStringWidth('ก')).toBe(1);
+      expect(getCachedStringWidth('กำ')).toBe(2);
+      expect(getCachedStringWidth('น้ำ')).toBe(2);
+      expect(getCachedStringWidth('\u0E01\u0E33\u0E49')).toBe(2);
+      expect(getCachedStringWidth('ำำ')).toBe(2);
+      expect(getCachedStringWidth('กำำ')).toBe(3);
+      expect(getCachedStringWidth('กำลังพิมพ์')).toBe(7);
+      expect(getCachedStringWidth('\u001b[31mกำ\u001b[39m')).toBe(2);
+    });
+
+    it('should count Lao SARA AM (U+0EB3) as 1 column when standalone or combined', () => {
+      expect(getCachedStringWidth('\u0EB3')).toBe(1);
+      expect(getCachedStringWidth('ຫຳ')).toBe(2);
+      expect(getCachedStringWidth('ນ້ຳ')).toBe(2);
+    });
+
+    it('should keep zero-width Thai combining marks at 0 width', () => {
+      expect(getCachedStringWidth('กิ')).toBe(1);
+      expect(getCachedStringWidth('ก้')).toBe(1);
+      expect(getCachedStringWidth('กิ่ง')).toBe(2);
+    });
+  });
+
+  describe('setAmbiguousCharactersWide', () => {
+    // Box drawing (U+2500), ellipsis, bullet and arrow are all East Asian
+    // Width "Ambiguous"; CJK ideographs are "Wide"; ASCII is "Narrow".
+    const AMBIGUOUS = ['─', '│', '╭', '…', '●', '→'];
+
+    afterEach(() => {
+      setAmbiguousCharactersWide(false);
+      vi.mocked(setStringWidthFunction).mockClear();
+    });
+
+    it('measures ambiguous-width characters as one cell by default', () => {
+      expect(areAmbiguousCharactersWide()).toBe(false);
+      for (const char of AMBIGUOUS) {
+        expect(getCachedStringWidth(char)).toBe(1);
+      }
+      expect(getCachedStringWidth('╭──╮')).toBe(4);
+    });
+
+    it('measures ambiguous-width characters as two cells when enabled', () => {
+      setAmbiguousCharactersWide(true);
+
+      expect(areAmbiguousCharactersWide()).toBe(true);
+      for (const char of AMBIGUOUS) {
+        expect(getCachedStringWidth(char)).toBe(2);
+      }
+      expect(getCachedStringWidth('╭──╮')).toBe(8);
+    });
+
+    it('does not change the width of narrow or wide characters', () => {
+      setAmbiguousCharactersWide(true);
+
+      expect(getCachedStringWidth('a')).toBe(1);
+      expect(getCachedStringWidth('hello world')).toBe(11);
+      expect(getCachedStringWidth('한')).toBe(2);
+      expect(getCachedStringWidth('日本語')).toBe(6);
+      expect(getCachedStringWidth('')).toBe(0);
+    });
+
+    it('invalidates cached measurements when the mode changes', () => {
+      const border = '─'.repeat(10);
+      expect(getCachedStringWidth(border)).toBe(10);
+
+      setAmbiguousCharactersWide(true);
+      expect(getCachedStringWidth(border)).toBe(20);
+
+      setAmbiguousCharactersWide(false);
+      expect(getCachedStringWidth(border)).toBe(10);
+    });
+
+    it("keeps Ink's layout engine in sync with the CLI measurements", () => {
+      setAmbiguousCharactersWide(true);
+
+      // Ink is (re-)registered with getCachedStringWidth itself, which drops
+      // Ink's own per-character width cache; the shared function then
+      // measures with the new mode.
+      expect(setStringWidthFunction).toHaveBeenCalledTimes(1);
+      expect(setStringWidthFunction).toHaveBeenCalledWith(getCachedStringWidth);
+      const inkStringWidth = vi.mocked(setStringWidthFunction).mock.calls[0][0];
+      expect(inkStringWidth('─')).toBe(2);
+      expect(inkStringWidth('…')).toBe(2);
+      expect(inkStringWidth('a')).toBe(1);
+      expect(inkStringWidth('한')).toBe(2);
+
+      setAmbiguousCharactersWide(false);
+
+      expect(setStringWidthFunction).toHaveBeenCalledTimes(2);
+      expect(setStringWidthFunction).toHaveBeenLastCalledWith(
+        getCachedStringWidth,
+      );
+      expect(inkStringWidth('─')).toBe(1);
+      expect(inkStringWidth('한')).toBe(2);
+    });
+
+    it('is a no-op when the mode does not change', () => {
+      setAmbiguousCharactersWide(false);
+      expect(setStringWidthFunction).not.toHaveBeenCalled();
+
+      setAmbiguousCharactersWide(true);
+      setAmbiguousCharactersWide(true);
+      expect(setStringWidthFunction).toHaveBeenCalledTimes(1);
     });
   });
 
