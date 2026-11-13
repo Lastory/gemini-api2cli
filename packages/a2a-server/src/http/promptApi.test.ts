@@ -361,6 +361,13 @@ describe('Prompt API routes', () => {
     expect(modelsResponse.body.models.length).toBeGreaterThan(0);
     expect(modelsResponse.body.models).toContainEqual(
       expect.objectContaining({
+        id: 'gemini-4-carbon',
+        label: 'Gemini 4 Carbon',
+        kind: 'pro',
+      }),
+    );
+    expect(modelsResponse.body.models).toContainEqual(
+      expect.objectContaining({
         id: 'gemini-4-argon',
         label: 'Gemini 4 Argon',
         kind: 'pro',
@@ -368,6 +375,17 @@ describe('Prompt API routes', () => {
     );
     expect(Array.isArray(modelsResponse.body.aliases)).toBe(true);
     expect(modelsResponse.body.aliases.length).toBeGreaterThan(0);
+
+    const carbonUpdateResponse = await request(app)
+      .put(PROMPT_API_CURRENT_MODEL_ROUTE)
+      .send({ model: 'gemini-4-carbon' });
+    expect(carbonUpdateResponse.status).toBe(200);
+    expect(carbonUpdateResponse.body.currentModel).toMatchObject({
+      id: 'gemini-4-carbon',
+      label: 'Gemini 4 Carbon',
+      kind: 'pro',
+      known: true,
+    });
 
     const argonUpdateResponse = await request(app)
       .put(PROMPT_API_CURRENT_MODEL_ROUTE)
