@@ -11,6 +11,7 @@ import {
   coreEvents,
   CoreEvent,
   type ApprovalModeChangedPayload,
+  type RetryAttemptPayload,
   logToolCall,
   convertToFunctionResponse,
   ToolConfirmationOutcome,
@@ -90,6 +91,7 @@ export class Session {
       CoreEvent.ApprovalModeChanged,
       this.handleApprovalModeChanged,
     );
+    coreEvents.on(CoreEvent.RetryAttempt, this.handleRetryAttempt);
 
     // Subscribe to tool confirmation requests to handle policy checks (e.g. auto-allowing safe shell commands)
     this.context.config
@@ -194,11 +196,27 @@ export class Session {
     }
   };
 
+  private handleRetryAttempt = (payload: RetryAttemptPayload) => {
+    if (payload.sessionId === this.id) {
+      const delaySec = Math.max(1, Math.round(payload.delayMs / 1000));
+      this.sendUpdate({
+        sessionUpdate: 'agent_thought_chunk',
+        content: {
+          type: 'text',
+          text: `[Retry ${payload.attempt}/${payload.maxAttempts}] ${payload.error || 'Request failed'}. Retrying in ${delaySec}s...`,
+        },
+      }).catch((err) => {
+        debugLogger.error(`Failed to send retry session update: ${err}`);
+      });
+    }
+  };
+
   async dispose(): Promise<void> {
     coreEvents.off(
       CoreEvent.ApprovalModeChanged,
       this.handleApprovalModeChanged,
     );
+    coreEvents.off(CoreEvent.RetryAttempt, this.handleRetryAttempt);
     this.disposeController.abort();
     if (this.context.config?.dispose) {
       try {
@@ -441,6 +459,7 @@ export class Session {
     let currentParts: Part[] = parts;
     let turnCount = 0;
     const maxTurns = this.context.config.getMaxSessionTurns();
+    let isFirstChunkAfterRetry = false;
 
     while (true) {
       turnCount++;
@@ -480,10 +499,16 @@ export class Session {
                 text: event.value,
               };
 
-              await this.sendUpdate({
+              const update: acp.SessionUpdate = {
                 sessionUpdate: 'agent_message_chunk',
                 content,
-              });
+                ...(isFirstChunkAfterRetry
+                  ? { _meta: { retry: true, reset: true } }
+                  : {}),
+              };
+              isFirstChunkAfterRetry = false;
+
+              await this.sendUpdate(update);
               break;
             }
 
@@ -493,6 +518,23 @@ export class Session {
                 sessionUpdate: 'agent_thought_chunk',
                 content: { type: 'text', text: thoughtText },
               });
+              break;
+            }
+
+            case GeminiEventType.Retry: {
+              toolCallRequests.length = 0;
+              debugLogger.warn(
+                'Model stream interrupted mid-response; retrying prompt...',
+              );
+              await this.sendUpdate({
+                sessionUpdate: 'agent_thought_chunk',
+                content: {
+                  type: 'text',
+                  text: '_[Stream interrupted. Retrying response...]_',
+                },
+                _meta: { retry: true },
+              });
+              isFirstChunkAfterRetry = true;
               break;
             }
 
@@ -1492,11 +1534,13 @@ export class Session {
               const match = fileContentRegex.exec(part);
               if (match) {
                 const filePathSpecInContent = match[1]; // This is a resolved pathSpec
-                const fileActualContent = match[2].trim();
+                const fileActualContent = match[2];
                 processedQueryParts.push({
                   text: `\nContent from @${filePathSpecInContent}:\n`,
                 });
-                processedQueryParts.push({ text: fileActualContent });
+                if (fileActualContent !== '') {
+                  processedQueryParts.push({ text: fileActualContent });
+                }
               } else {
                 processedQueryParts.push({ text: part });
               }

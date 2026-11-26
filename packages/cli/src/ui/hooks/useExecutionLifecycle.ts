@@ -21,6 +21,12 @@ import {
   ExecutionLifecycleService,
   CoreToolCallStatus,
   escapeShellArg,
+  getShellConfiguration,
+  isDefaultIsInteractiveGeminiCommand,
+  isInteractiveGeminiCommand,
+  isInteractiveGeminiCommandAsync,
+  isKnownInteractiveGeminiCommandSync,
+  INTERACTIVE_GEMINI_SHELL_ERROR,
 } from '@google/gemini-cli-core';
 import { type PartListUnion } from '@google/genai';
 import type { UseHistoryManagerReturn } from './useHistoryManager.js';
@@ -357,12 +363,53 @@ export const useExecutionLifecycle = (
         userMessageTimestamp,
       );
 
+      const useAsyncPowerShellGeminiCheck =
+        typeof isDefaultIsInteractiveGeminiCommand === 'function' &&
+        isDefaultIsInteractiveGeminiCommand(isInteractiveGeminiCommand) &&
+        typeof isInteractiveGeminiCommandAsync === 'function' &&
+        typeof isKnownInteractiveGeminiCommandSync === 'function' &&
+        typeof getShellConfiguration === 'function' &&
+        getShellConfiguration().shell === 'powershell';
+
+      const syncInteractiveGeminiCheck = useAsyncPowerShellGeminiCheck
+        ? isKnownInteractiveGeminiCommandSync(rawQuery)
+        : isInteractiveGeminiCommand(rawQuery);
+
+      if (syncInteractiveGeminiCheck === true) {
+        addItemToHistory(
+          { type: 'error', text: INTERACTIVE_GEMINI_SHELL_ERROR },
+          userMessageTimestamp,
+        );
+        return true;
+      }
+
       const isWindows = os.platform() === 'win32';
       const targetDir = config.getTargetDir();
       let commandToExecute = rawQuery;
       let pwdFilePath: string | undefined;
 
       const executeCommand = async () => {
+        if (
+          syncInteractiveGeminiCheck === undefined &&
+          (await isInteractiveGeminiCommandAsync(
+            rawQuery,
+            undefined,
+            abortSignal,
+          ))
+        ) {
+          addItemToHistory(
+            { type: 'error', text: INTERACTIVE_GEMINI_SHELL_ERROR },
+            userMessageTimestamp,
+          );
+          return;
+        }
+
+        if (abortSignal.aborted) {
+          setPendingHistoryItem(null);
+          setShellInputFocused(false);
+          return;
+        }
+
         let cumulativeStdout: string | AnsiOutput = '';
         let isBinaryStream = false;
         let binaryBytesReceived = 0;

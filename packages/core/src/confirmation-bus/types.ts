@@ -118,6 +118,7 @@ export type SerializableConfirmationDetails =
       rootCommand: string;
       rootCommands: string[];
       commands?: string[];
+      hasRedirection?: boolean;
       untrustedFlags?: string[];
       modifiedBuildFiles?: string[];
     }
@@ -154,6 +155,7 @@ export interface UpdatePolicy {
   commandPrefix?: string | string[];
   mcpName?: string;
   allowRedirection?: boolean;
+  allowCommandSubstitution?: boolean;
   modes?: ApprovalMode[];
 }
 

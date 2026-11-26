@@ -23,7 +23,10 @@ import {
   stripShellWrapper,
   normalizeCommand,
   hasRedirection,
+  hasUnresolvedShellExpansion,
+  detectCommandSubstitution,
   resolveExecutable,
+  isInteractiveGeminiCommand,
 } from './shell-utils.js';
 import path from 'node:path';
 
@@ -290,6 +293,117 @@ describe('hasRedirection', () => {
   });
 });
 
+describe('hasUnresolvedShellExpansion', () => {
+  // Test titles use template literals because `it.each` title formatting
+  // treats `$1` in a command as a placeholder.
+  for (const command of [
+    'find . {-exec,sh,marker.sh,\\;}',
+    'echo {1..3}',
+    'echo a{b,c}d',
+    'echo $HOME',
+    'echo ${HOME}',
+    'ls ${d:-/etc}',
+    'ls "$HOME"',
+    'echo $1',
+    'echo $@',
+    "echo $'x'",
+    'echo $"x"',
+    'echo $((1+2))',
+    'echo $(pwd)',
+    'echo `pwd`',
+    'cat <(ls)',
+    'ls *.md',
+    'ls ?.md',
+    'ls [ab].md',
+    'find . -exe[c]',
+    'ls && echo {a,b}',
+    'find . -maxdepth 0 -ex\\\nec',
+    'find . -maxdepth 0 -ex\\\r\nec',
+    'find . -maxdepth 0 "-ex\\\nec"',
+    'find . -name a#',
+    "echo 'a'#b",
+  ]) {
+    it(`returns true when arguments change after shell expansion: ${command}`, () => {
+      expect(hasUnresolvedShellExpansion(command)).toBe(true);
+    });
+  }
+
+  for (const command of [
+    'ls -la',
+    "echo '{a,b}'",
+    'echo "{a,b}"',
+    "grep -E 'a{1,3}' f.txt",
+    "cat 'file{1,2}.txt'",
+    'echo {}',
+    'echo {id}',
+    "awk '{print $1}' f.txt",
+    "echo '$HOME'",
+    "ls '*.md'",
+    'ls "*.md"',
+    'ls \\*.md',
+    'cat ~/notes.txt',
+    "find . -name '*.md'",
+    'ls \\\n  -la',
+    'ls -la \\\n  src',
+    "echo 'a\\\nb'",
+    'echo "a\\\\\nb"',
+    'ls -la # list files',
+    'echo \'a#b\' "c#d"',
+  ]) {
+    it(`returns false when arguments are literal: ${command}`, () => {
+      expect(hasUnresolvedShellExpansion(command)).toBe(false);
+    });
+  }
+
+  it('returns true when the command has a syntax error', () => {
+    expect(hasUnresolvedShellExpansion('echo "unterminated')).toBe(true);
+  });
+
+  it('returns true when parsing times out', () => {
+    const nowSpy = vi.spyOn(performance, 'now');
+    nowSpy.mockReturnValueOnce(0).mockReturnValue(2000);
+    try {
+      const complexCommand =
+        'ls -la && ' + Array(100).fill('echo "hello"').join(' && ');
+      expect(hasUnresolvedShellExpansion(complexCommand)).toBe(true);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('returns true when the bash parser is unavailable', async () => {
+    vi.resetModules();
+    vi.doMock('./fileUtils.js', () => ({
+      loadWasmBinary: vi.fn().mockRejectedValue(new Error('Wasm load failed')),
+    }));
+    try {
+      const shellUtils = await import('./shell-utils.js');
+      await shellUtils.initializeShellParsers();
+      expect(shellUtils.hasUnresolvedShellExpansion('ls -la')).toBe(true);
+    } finally {
+      vi.doUnmock('./fileUtils.js');
+    }
+  });
+
+  describe('when the shell is PowerShell', () => {
+    beforeEach(() => {
+      mockPlatform.mockReturnValue('win32');
+      vi.stubEnv('ComSpec', 'powershell.exe');
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it.each(['echo $HOME', 'ls *.md', 'find . {-exec,sh,marker.sh,\\;}'])(
+      'returns false for any command: %s',
+      (command) => {
+        expect(hasUnresolvedShellExpansion(command)).toBe(false);
+      },
+    );
+  });
+});
+
 describeWindowsOnly('PowerShell integration', () => {
   const originalComSpec = process.env['ComSpec'];
 
@@ -387,6 +501,85 @@ describe('stripShellWrapper', () => {
     expect(
       stripShellWrapper('pwsh -NoProfile -Command "Get-ChildItem"'),
     ).toEqual('Get-ChildItem');
+  });
+
+  it('should strip PowerShell wrappers with -NonInteractive, -NoLogo, and Windows paths', () => {
+    expect(
+      stripShellWrapper(
+        'powershell.exe -NoProfile -NonInteractive -Command "git log -n 10 --oneline"',
+      ),
+    ).toEqual('git log -n 10 --oneline');
+    expect(
+      stripShellWrapper(
+        'pwsh.exe -NonInteractive -NoProfile -NoLogo -c "Get-ChildItem"',
+      ),
+    ).toEqual('Get-ChildItem');
+    expect(
+      stripShellWrapper(
+        'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -Command "git diff main...HEAD --stat"',
+      ),
+    ).toEqual('git diff main...HEAD --stat');
+    expect(
+      stripShellWrapper(
+        '"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -NoProfile -NonInteractive -Command "Get-Location"',
+      ),
+    ).toEqual('Get-Location');
+  });
+
+  it('should unescape C-argv escaped quotes inside outer PowerShell -Command "..." without corrupting compound commands', () => {
+    expect(
+      stripShellWrapper('powershell -Command "node -e \\"console.log(1)\\""'),
+    ).toEqual('node -e "console.log(1)"');
+    expect(
+      stripShellWrapper(
+        'powershell.exe -NoProfile -NonInteractive -Command "node -e \\"console.log(\\\\\\"hello (world)\\\\\\")\\""',
+      ),
+    ).toEqual('node -e "console.log(\\"hello (world)\\")"');
+    expect(stripShellWrapper('powershell -Command "echo a"; whoami')).toEqual(
+      '"echo a"; whoami',
+    );
+    expect(stripShellWrapper('powershell -Command "echo a"; echo "b"')).toEqual(
+      'powershell -Command "echo a"; echo "b"',
+    );
+    expect(
+      stripShellWrapper('cmd.exe /c "echo a" & whoami & echo "b"'),
+    ).toEqual('cmd.exe /c "echo a" & whoami & echo "b"');
+    expect(
+      stripShellWrapper(
+        'cmd.exe /c "powershell.exe -NoProfile -NonInteractive -Command \\"echo $(whoami)\\""',
+      ),
+    ).toEqual('echo $(whoami)');
+    expect(stripShellWrapper('powershell -Command "echo `$(whoami)"')).toEqual(
+      'echo $(whoami)',
+    );
+    // Refuse to unwrap when unwrapping would hide outer-shell substitution inside single quotes or escaped backticks
+    expect(
+      stripShellWrapper('powershell -Command "echo \'$(whoami)\'"'),
+    ).toEqual('powershell -Command "echo \'$(whoami)\'"');
+    expect(
+      stripShellWrapper('powershell -Command "echo \'``$(whoami)\'"'),
+    ).toEqual('powershell -Command "echo \'``$(whoami)\'"');
+    expect(stripShellWrapper('powershell -Command "echo ``$(whoami)"')).toEqual(
+      'echo `$(whoami)',
+    );
+    expect(stripShellWrapper('bash -c "echo \'$(whoami)\'"')).toEqual(
+      'bash -c "echo \'$(whoami)\'"',
+    );
+    expect(stripShellWrapper('bash -c "echo \\\\$(whoami)"')).toEqual(
+      'bash -c "echo \\\\$(whoami)"',
+    );
+    // Even backslashes before quote in cmd.exe /c close the quote rather than escaping it
+    expect(
+      stripShellWrapper('cmd.exe /c "echo \\\\"& whoami & echo \\""'),
+    ).toEqual('cmd.exe /c "echo \\\\"& whoami & echo \\""');
+    // Even backslashes before doubled quotes ("") or closing quote in cmd.exe /c and PowerShell are halved
+    expect(stripShellWrapper('cmd.exe /c "echo foo\\\\""bar"')).toEqual(
+      'echo foo\\"bar',
+    );
+    expect(stripShellWrapper('cmd.exe /c "echo C:\\\\"')).toEqual('echo C:\\');
+    expect(stripShellWrapper('powershell -Command "echo C:\\\\"')).toEqual(
+      'echo C:\\',
+    );
   });
 
   it('should not strip anything if no wrapper is present', () => {
@@ -516,7 +709,11 @@ describe('getShellConfiguration', () => {
         });
         const config = getShellConfiguration();
         expect(config.executable).toBe(pwshPath);
-        expect(config.argsPrefix).toEqual(['-NoProfile', '-Command']);
+        expect(config.argsPrefix).toEqual([
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+        ]);
         expect(config.shell).toBe('powershell');
       },
     );
@@ -674,5 +871,204 @@ describe('resolveExecutable', () => {
     mockPlatform.mockReturnValue('linux');
 
     expect(resolveExecutable('anything')).toBeUndefined();
+  });
+});
+
+describe('detectCommandSubstitution (PowerShell)', () => {
+  beforeEach(() => {
+    mockPlatform.mockReturnValue('win32');
+    vi.stubEnv('ComSpec', 'powershell.exe');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('should allow PowerShell instance and static method calls', () => {
+    expect(detectCommandSubstitution('$str.Trim()')).toBe(false);
+    expect(
+      detectCommandSubstitution("[System.IO.Path]::GetFullPath('foo')"),
+    ).toBe(false);
+    expect(
+      detectCommandSubstitution(
+        "Get-ChildItem | Where-Object { $_.Name.EndsWith('.ts') }",
+      ),
+    ).toBe(false);
+    expect(detectCommandSubstitution('$arr[0].ToString()')).toBe(false);
+  });
+
+  it('should allow PowerShell conditionals, compound boolean parens, and param blocks', () => {
+    expect(
+      detectCommandSubstitution(
+        'if (($a -eq 1) -and ($b -eq 2)) { Write-Host ok }',
+      ),
+    ).toBe(false);
+    expect(detectCommandSubstitution('if (-not ($x)) { Write-Host ok }')).toBe(
+      false,
+    );
+    expect(detectCommandSubstitution('while (($i -lt 10)) { $i++ }')).toBe(
+      false,
+    );
+    expect(
+      detectCommandSubstitution('for ($i = 0; $i -lt 10; $i++) { $i }'),
+    ).toBe(false);
+    expect(
+      detectCommandSubstitution('& { param($x, [string]$y) Write-Host $x }'),
+    ).toBe(false);
+    expect(
+      detectCommandSubstitution(
+        'function Test-Helper($x, [int]$y) { $x + $y }',
+      ),
+    ).toBe(false);
+  });
+
+  it('should allow Windows paths with parens, braced variables, comments, and here-strings without substitution', () => {
+    expect(
+      detectCommandSubstitution('dir "C:\\Program Files (x86)\\Git"'),
+    ).toBe(false);
+    expect(
+      detectCommandSubstitution("dir 'C:\\Program Files (x86)\\Git'"),
+    ).toBe(false);
+    expect(detectCommandSubstitution('echo ${env:ProgramFiles(x86)}')).toBe(
+      false,
+    );
+    expect(detectCommandSubstitution("git status # don't fail (check)")).toBe(
+      false,
+    );
+    expect(
+      detectCommandSubstitution('git status <# block (comment) $(safe) #>'),
+    ).toBe(false);
+    expect(detectCommandSubstitution('echo "hello ""(world)"""')).toBe(false);
+    expect(detectCommandSubstitution("echo 'hello ''$(safe)'''")).toBe(false);
+    expect(detectCommandSubstitution("@'\n$(not_expanded)\n(safe)\n'@")).toBe(
+      false,
+    );
+    expect(detectCommandSubstitution('@"\nplain (parens) text\n"@')).toBe(
+      false,
+    );
+    expect(detectCommandSubstitution('$sum = ($a + $b) * 2')).toBe(false);
+  });
+
+  it('should detect genuine PowerShell command substitutions and security edge cases', () => {
+    expect(detectCommandSubstitution('echo $(whoami)')).toBe(true);
+    expect(detectCommandSubstitution('echo "$(whoami)"')).toBe(true);
+    expect(detectCommandSubstitution('@"\n$(whoami)\n"@')).toBe(true);
+    expect(detectCommandSubstitution('echo @(whoami)')).toBe(true);
+    expect(detectCommandSubstitution('echo (whoami)')).toBe(true);
+    expect(detectCommandSubstitution('cmd.exe(whoami)')).toBe(true);
+    expect(detectCommandSubstitution("$str.Replace((whoami), 'a')")).toBe(true);
+    expect(detectCommandSubstitution('echo ($a | Invoke-Expression)')).toBe(
+      true,
+    );
+    // In PowerShell, backslash does not escape quotes, so \" closes the string!
+    expect(detectCommandSubstitution('echo "foo\\" @(whoami)"')).toBe(true);
+    expect(detectCommandSubstitution('echo "foo\\" (whoami)"')).toBe(true);
+    expect(detectCommandSubstitution('echo "\\$(whoami)"')).toBe(true);
+    expect(detectCommandSubstitution("# don't\necho $(whoami)")).toBe(true);
+    // Security hardening: assignments in parens, scriptblock .Invoke(), mid-token here-strings/comments, CR newlines, Unicode quotes
+    expect(detectCommandSubstitution('echo ($x = whoami)')).toBe(true);
+    expect(detectCommandSubstitution('if ($x = (whoami)) { }')).toBe(true);
+    expect(detectCommandSubstitution('echo ((whoami))')).toBe(true);
+    expect(detectCommandSubstitution('{ whoami }.Invoke()')).toBe(true);
+    expect(detectCommandSubstitution('echo foo@"\n$(whoami)\n"@')).toBe(true);
+    expect(detectCommandSubstitution("echo foo@'\n'$(whoami)\n'@")).toBe(true);
+    expect(detectCommandSubstitution('echo foo<# $(whoami) #>')).toBe(true);
+    expect(detectCommandSubstitution("@'\n'@; $(whoami)")).toBe(true);
+    expect(detectCommandSubstitution("@'\n\r'@; $(whoami)")).toBe(true);
+    expect(detectCommandSubstitution("echo 'hello\u2019 $(whoami) '")).toBe(
+      true,
+    );
+    expect(detectCommandSubstitution('echo \u201c$(whoami)\u201d')).toBe(true);
+    // Parameter defaults, assignments in conditions, pipelines in conditions, and comment-spoofed parens executing commands
+    expect(detectCommandSubstitution('if ($a | (whoami)) { }')).toBe(true);
+    expect(
+      detectCommandSubstitution('for ($i = (whoami); $i -lt 1; $i++) { }'),
+    ).toBe(true);
+    expect(detectCommandSubstitution('& { param($x = (whoami)) }')).toBe(true);
+    expect(detectCommandSubstitution('echo ($a <# ) #> ; whoami)')).toBe(true);
+    expect(detectCommandSubstitution('if foo (whoami) { }')).toBe(true);
+    expect(
+      detectCommandSubstitution(
+        stripShellWrapper('powershell -Command "echo \'$(whoami)\'"'),
+      ),
+    ).toBe(true);
+    expect(
+      detectCommandSubstitution(
+        stripShellWrapper('powershell -Command "echo `$(whoami)"'),
+      ),
+    ).toBe(true);
+    expect(
+      detectCommandSubstitution(
+        stripShellWrapper('powershell -Command "echo ``$(whoami)"'),
+      ),
+    ).toBe(true);
+  });
+
+  it('should run in linear time without ReDoS on large adversarial inputs', () => {
+    const start = performance.now();
+    expect(
+      detectCommandSubstitution('('.repeat(25_000) + '$a' + ')'.repeat(25_000)),
+    ).toBe(false);
+    expect(
+      detectCommandSubstitution(
+        '($a + '.repeat(10_000) + '$b' + ')'.repeat(10_000),
+      ),
+    ).toBe(false);
+    expect(detectCommandSubstitution(';if a'.repeat(10_000) + '(')).toBe(true);
+    expect(detectCommandSubstitution('$a.b'.repeat(10_000) + '()')).toBe(false);
+    expect(
+      stripShellWrapper(
+        'powershell.exe ' + '-NoProfile '.repeat(5_000) + 'git status',
+      ),
+    ).toContain('git status');
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
+});
+
+describe('isInteractiveGeminiCommand', () => {
+  it('should detect bare interactive gemini and gemini config commands', () => {
+    expect(isInteractiveGeminiCommand('gemini')).toBe(true);
+    expect(
+      isInteractiveGeminiCommand(
+        'gemini config set default-model gemini-2.5 -y',
+      ),
+    ).toBe(true);
+    expect(isInteractiveGeminiCommand('gemini -m gemini-2.5-pro')).toBe(true);
+    expect(isInteractiveGeminiCommand('gemini -i "hello"')).toBe(true);
+    expect(isInteractiveGeminiCommand('echo hi && gemini config list')).toBe(
+      true,
+    );
+    expect(isInteractiveGeminiCommand('bash -c "gemini"')).toBe(true);
+    expect(isInteractiveGeminiCommand('sudo -u root gemini')).toBe(true);
+    expect(isInteractiveGeminiCommand('sudo -E gemini')).toBe(true);
+    expect(isInteractiveGeminiCommand('env -i FOO=1 gemini')).toBe(true);
+    expect(isInteractiveGeminiCommand('env -u HOME gemini')).toBe(true);
+    expect(isInteractiveGeminiCommand('command -p gemini')).toBe(true);
+    expect(isInteractiveGeminiCommand('exec -a custom gemini')).toBe(true);
+    expect(isInteractiveGeminiCommand('\\gemini')).toBe(true);
+    expect(isInteractiveGeminiCommand('/path/with\\ space/gemini')).toBe(true);
+    expect(isInteractiveGeminiCommand('C:\\Users\\dev\\gemini.cmd')).toBe(true);
+    expect(isInteractiveGeminiCommand('node_modules\\.bin\\gemini')).toBe(true);
+  });
+
+  it('should allow non-interactive flags and subcommands', () => {
+    expect(isInteractiveGeminiCommand('gemini --version')).toBe(false);
+    expect(isInteractiveGeminiCommand('gemini -v')).toBe(false);
+    expect(isInteractiveGeminiCommand('gemini --help')).toBe(false);
+    expect(isInteractiveGeminiCommand('gemini -h')).toBe(false);
+    expect(isInteractiveGeminiCommand('gemini -p "summarize file"')).toBe(
+      false,
+    );
+    expect(isInteractiveGeminiCommand('gemini --prompt="summarize file"')).toBe(
+      false,
+    );
+    expect(isInteractiveGeminiCommand('gemini --list-models')).toBe(false);
+    expect(isInteractiveGeminiCommand('gemini skills list')).toBe(false);
+    expect(isInteractiveGeminiCommand('gemini models list')).toBe(false);
+    expect(isInteractiveGeminiCommand('gemini mcp list')).toBe(false);
+    expect(isInteractiveGeminiCommand('command -v gemini')).toBe(false);
+    expect(isInteractiveGeminiCommand('command -V gemini')).toBe(false);
+    expect(isInteractiveGeminiCommand('gemini\\ config')).toBe(false);
+    expect(isInteractiveGeminiCommand('git status')).toBe(false);
   });
 });

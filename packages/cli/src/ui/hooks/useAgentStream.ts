@@ -98,6 +98,7 @@ export interface UseAgentStreamOptions {
     clearBuffer?: boolean,
   ) => void;
   isShellFocused?: boolean;
+  isEditorDialogOpen?: boolean;
   logger?: Logger | null;
 }
 
@@ -116,6 +117,7 @@ export const useAgentStream = ({
   addItem,
   onCancelSubmit,
   isShellFocused,
+  isEditorDialogOpen,
   logger,
 }: UseAgentStreamOptions) => {
   const [initError] = useState<string | null>(null);
@@ -175,6 +177,7 @@ export const useAgentStream = ({
           prompt_id: '',
         },
         status: t.status,
+        confirmationDetails: t.confirmationDetails,
       })),
     [trackedTools],
   );
@@ -535,7 +538,7 @@ export const useAgentStream = ({
 
   useKeypress(
     (key) => {
-      if (key.name === 'escape' && !isShellFocused) {
+      if (key.name === 'escape' && !isShellFocused && !isEditorDialogOpen) {
         void cancelOngoingRequest(false);
         return true;
       }
@@ -543,8 +546,9 @@ export const useAgentStream = ({
     },
     {
       isActive:
-        streamingState === StreamingState.Responding ||
-        streamingState === StreamingState.WaitingForConfirmation,
+        !isEditorDialogOpen &&
+        (streamingState === StreamingState.Responding ||
+          streamingState === StreamingState.WaitingForConfirmation),
     },
   );
 

@@ -6,6 +6,7 @@
 
 import type { SafetyCheckInput } from '../safety/protocol.js';
 import type { SandboxManager } from '../services/sandboxManager.js';
+import type { SafeRegExp } from './safe-regex.js';
 
 export enum PolicyDecision {
   ALLOW = 'allow',
@@ -139,8 +140,11 @@ export interface PolicyRule {
   /**
    * Pattern to match against tool arguments.
    * Can be used for more fine-grained control.
+   *
+   * Must be created with `SafeRegExp.compile()`, which uses a linear-time
+   * engine. A native `RegExp` is not accepted.
    */
-  argsPattern?: RegExp;
+  argsPattern?: SafeRegExp;
 
   /**
    * Metadata annotations provided by the tool (e.g. readOnlyHint).
@@ -180,6 +184,15 @@ export interface PolicyRule {
   allowRedirection?: boolean;
 
   /**
+   * If true, explicitly allows command substitution for shell commands matched by
+   * this rule. By default (when false or omitted), ALLOW is downgraded to
+   * ASK_USER when command substitution is detected, even if inner subcommands
+   * are allowed.
+   * Only applies when decision is ALLOW.
+   */
+  allowCommandSubstitution?: boolean;
+
+  /**
    * Effect of the rule's source.
    * e.g. "my-policies.toml", "Settings (MCP Trusted)", etc.
    */
@@ -207,8 +220,11 @@ export interface SafetyCheckerRule {
   /**
    * Pattern to match against tool arguments.
    * Can be used for more fine-grained control.
+   *
+   * Must be created with `SafeRegExp.compile()`, which uses a linear-time
+   * engine. A native `RegExp` is not accepted.
    */
-  argsPattern?: RegExp;
+  argsPattern?: SafeRegExp;
 
   /**
    * Metadata annotations provided by the tool (e.g. readOnlyHint).
